@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="60">
+<title>Geräte-Monitor</title>
+<style>
+  @import url('https://cdnjs.cloudflare.com/ajax/libs/JetBrains-Mono/2.304/webfonts/jetbrainsmono.min.css');
+
+  :root {
+    --bg: #EEF1F0;
+    --panel: #FFFFFF;
+    --border: #D8DEDC;
+    --ink: #1B2430;
+    --muted: #64707A;
+    --accent-stale: #C97A2B;
+    --accent-fresh: #2B7A78;
+    --status-new: #E0871F;
+    --status-active: #D64545;
+    --status-error: #7A2E2E;
+    --status-offline: #7A2E2E;
+    --status-disabled: #8A93A0;
+    --status-unknown: #B7BEC4;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    background-image:
+      radial-gradient(circle, #d3dad8 1px, transparent 1px);
+    background-size: 22px 22px;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    padding: 40px 24px;
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-stale);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-stale);
+    animation: pulse 1.8s infinite ease-in-out;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(201, 122, 43, 0.4); }
+    50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(201, 122, 43, 0); }
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  .count {
+    font-family: 'JetBrains Mono', monospace;
+    text-align: right;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .count strong {
+    display: block;
+    font-size: 28px;
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+
+  @media (max-width: 640px) {
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid transparent;
+    border-radius: 10px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .tile-new     { border-left-color: var(--status-new); }
+  .tile-active  { border-left-color: var(--status-active); }
+  .tile-alert   { border-left-color: var(--accent-stale); }
+
+  .tile-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .tile-value {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--ink);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .tile-new .tile-value     { color: var(--status-new); }
+  .tile-active .tile-value  { color: var(--status-active); }
+  .tile-alert .tile-value   { color: var(--accent-stale); }
+
+  .tile-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+  }
+
+  .tile-new .tile-dot     { background: var(--status-new); }
+  .tile-active .tile-dot {
+    background: var(--status-active);
+    animation: blink-dot 1s infinite;
+  }
+  .tile-alert .tile-dot   { background: var(--accent-stale); }
+
+  .section-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 28px 0 10px;
+  }
+
+  .section-title:first-of-type { margin-top: 0; }
+
+  tbody tr.tr-alert { border-left-color: var(--accent-stale); background: #FBF3EA; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    width: 100%;
+    min-width: 560px;
+    border-collapse: collapse;
+  }
+
+  @media (max-width: 640px) {
+    body { padding: 20px 12px; }
+    .wrap { max-width: 100%; }
+    thead th, tbody td { padding: 10px 12px; font-size: 13px; }
+    h1 { font-size: 22px; }
+  }
+
+  thead th {
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: #FAFBFA;
+  }
+
+  tbody td {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+
+  tbody tr:hover { background: #F7F9F8; }
+
+  tbody tr {
+    border-left: 3px solid transparent;
+  }
+
+  tbody tr.status-new     { border-left-color: var(--status-new); }
+  tbody tr.status-active  { border-left-color: var(--status-active); }
+  tbody tr.status-error   { border-left-color: var(--status-error); background: #FBF1EE; }
+  tbody tr.status-offline { border-left-color: var(--status-offline); background: #FBF1EE; }
+  tbody tr.status-disabled{ border-left-color: var(--status-disabled); }
+  tbody tr.status-unknown { border-left-color: var(--status-unknown); }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  .status-new     .status-dot { background: var(--status-new); }
+  .status-error   .status-dot { background: var(--status-error); }
+  .status-disabled .status-dot { background: var(--status-disabled); }
+  .status-unknown .status-dot { background: var(--status-unknown); }
+
+  .status-active .status-dot,
+  .status-offline .status-dot {
+    background: var(--status-active);
+    animation: blink-dot 1s infinite;
+  }
+
+  .status-offline .status-dot {
+    background: var(--status-offline);
+  }
+
+  @keyframes blink-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.15; }
+  }
+
+  td.mono, th.mono-col {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .signal {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    margin-right: 8px;
+  }
+
+  .btn-update {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    background: var(--accent-stale);
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+
+  .btn-update:hover:not(:disabled) { opacity: 0.9; }
+
+  .btn-update:disabled {
+    background: var(--status-unknown);
+    cursor: not-allowed;
+  }
+
+  .update-status {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+    max-width: 220px;
+  }
+
+  .update-status.update-ok   { color: var(--accent-fresh); }
+  .update-status.update-fail { color: var(--status-error); }
+
+  .update-pending {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-stale);
+  }
+
+  .update-pending-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-stale);
+    animation: blink-dot 1s infinite;
+  }
+
+  .empty, .error {
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .error {
+    color: var(--accent-stale);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <div class="eyebrow"><span class="pulse"></span>shelly &middot; scan &ge; 10 min</div>
+        <h1>Geräte-Monitor</h1>
+      </div>
+      <div class="meta">dk9mbs.de/api/v1.0/data &middot; iot_device &middot; refresh in <span id="countdown">60</span>s</div>
+    </header>
+
+    <div class="tiles">
+      <div class="tile tile-new">
+        <div>
+          <div class="tile-label">Status: Neu</div>
+          <div class="tile-value">{{ new_count }}</div>
+        </div>
+        <span class="tile-dot"></span>
+      </div>
+      <div class="tile tile-active">
+        <div>
+          <div class="tile-label">Status: Offline</div>
+          <div class="tile-value">{{ active_count }}</div>
+        </div>
+        <span class="tile-dot"></span>
+      </div>
+      <div class="tile tile-alert">
+        <div>
+          <div class="tile-label">Sensoren still</div>
+          <div class="tile-value">{{ sensor_stale_count }}</div>
+        </div>
+        <span class="tile-dot"></span>
+      </div>
+      <div class="tile tile-alert">
+        <div>
+          <div class="tile-label">Updates verfügbar</div>
+          <div class="tile-value">{{ version_outdated_count }}</div>
+        </div>
+        <span class="tile-dot"></span>
+      </div>
+    </div>
+
+    <div class="section-title">iot_device &middot; auffällige Geräte</div>
+    <div class="panel">
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% elif rows|length == 0 %}
+        <div class="empty">Keine Geräte gefunden, die länger als 10 Minuten nicht gescannt wurden.</div>
+      {% else %}
+        <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              {% for field, label in columns %}
+                <th class="{{ 'mono-col' if field != 'name' else '' }}">{{ label }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr class="{{ row._status_class }}" title="Status: {{ row._status_label }}">
+                {% for field, label in columns %}
+                  <td class="{{ 'mono' if field != 'name' else '' }}">
+                    {% if field == 'name' %}<span class="status-dot"></span>{% endif %}{{ row[field] }}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </div>
+      {% endif %}
+    </div>
+
+    {% macro simple_table(cols, data, empty_message, error_message) %}
+      <div class="panel">
+        {% if error_message %}
+          <div class="error">{{ error_message }}</div>
+        {% elif data|length == 0 %}
+          <div class="empty">{{ empty_message }}</div>
+        {% else %}
+          <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {% for field, label in cols %}
+                  <th class="mono-col">{{ label }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in data %}
+                <tr class="tr-alert">
+                  {% for field, label in cols %}
+                    <td class="mono">{{ row[field] }}</td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          </div>
+        {% endif %}
+      </div>
+    {% endmacro %}
+
+    <div class="section-title">iot_sensor &middot; notify=-1 &amp; last_value_on &ge; 15 min</div>
+    {{ simple_table(sensor_columns, sensor_rows,
+                     "Keine Sensoren gefunden, die länger als 15 Minuten keinen Wert gemeldet haben.",
+                     sensor_error) }}
+
+    <div class="section-title">iot_device &middot; Update verfügbar (version &ne; version_available)</div>
+    <div class="panel">
+      {% if version_error %}
+        <div class="error">{{ version_error }}</div>
+      {% elif version_rows|length == 0 %}
+        <div class="empty">Alle Shelly-Geräte sind auf der verfügbaren Version.</div>
+      {% else %}
+        <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              {% for field, label in version_columns %}
+                <th class="mono-col">{{ label }}</th>
+              {% endfor %}
+              <th class="mono-col">Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in version_rows %}
+              <tr class="tr-alert">
+                {% for field, label in version_columns %}
+                  <td class="mono">{{ row[field] }}</td>
+                {% endfor %}
+                <td class="mono">
+                  {% if row._pending_seconds is not none %}
+                    <div class="update-pending">
+                      <span class="update-pending-dot"></span>
+                      Update läuft (seit {{ row._pending_seconds }}s)
+                    </div>
+                  {% else %}
+                    <button
+                      class="btn-update"
+                      onclick="updateFirmware(this, '{{ row.id }}', '{{ row._address }}')"
+                      {% if not row._address %}disabled title="Keine Adresse bekannt"{% endif %}
+                    >Update starten</button>
+                  {% endif %}
+                  <div class="update-status"></div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <script>
+    (function () {
+      var seconds = 60;
+      var el = document.getElementById('countdown');
+      setInterval(function () {
+        seconds = Math.max(0, seconds - 1);
+        el.textContent = seconds;
+      }, 1000);
+    })();
+
+    function updateFirmware(btn, deviceId, address) {
+      if (!address) { return; }
+      var confirmed = confirm(
+        'Update für Gerät ' + deviceId + ' (' + address + ') jetzt auslösen?\n' +
+        'Das Gerät startet danach neu und ist kurz nicht erreichbar.'
+      );
+      if (!confirmed) { return; }
+
+      var row = btn.closest('tr');
+      var statusEl = row.querySelector('.update-status');
+      btn.disabled = true;
+      statusEl.textContent = 'Wird ausgelöst …';
+      statusEl.className = 'update-status';
+
+      fetch('/device/' + encodeURIComponent(deviceId) + '/update-firmware', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'address=' + encodeURIComponent(address)
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.success) {
+            btn.outerHTML =
+              '<div class="update-pending">' +
+              '<span class="update-pending-dot"></span>' +
+              'Update läuft (seit 0s)' +
+              '</div>';
+          } else {
+            btn.disabled = false;
+          }
+          statusEl.textContent = data.message;
+          statusEl.className = 'update-status ' + (data.success ? 'update-ok' : 'update-fail');
+        })
+        .catch(function (err) {
+          statusEl.textContent = 'Fehler: ' + err;
+          statusEl.className = 'update-status update-fail';
+          btn.disabled = false;
+        });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Zugangsdaten - NIEMALS committen
+.env
+*.env
+ 
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+ 
+# Laufzeit-Zustandsdateien des Dashboards (gerätespezifisch, kein Quellcode)
+pending_updates.json
+device_status_state.json
+ 
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
+
