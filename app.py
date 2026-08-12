@@ -102,11 +102,14 @@ def get_pending_seconds(device_id: str) -> Optional[int]:
     return int(elapsed)
 
 
-# Merkt sich, fuer welche Geraete/Sensoren bereits eine Offline-Meldung per
-# Telegram verschickt wurde, damit jedes Ereignis nur einmalig meldet. Wird
-# aktualisiert, sobald ein Geraet/Sensor wieder verschwindet (online /
-# neuer Sensorwert) - erst dann kann ein erneutes Offline-Ereignis wieder
-# eine neue Meldung ausloesen.
+# Merkt sich als {id: label}, fuer welche Geraete/Sensoren bereits eine
+# Meldung per Telegram verschickt wurde, damit jedes Ereignis nur einmalig
+# meldet. Sobald ein Eintrag wieder verschwindet (online / neuer Sensorwert
+# / nicht mehr 'neu'), wird eine Erholungs-Meldung verschickt und der
+# Eintrag entfernt - erst dann kann ein erneutes Ereignis wieder eine neue
+# Meldung ausloesen. Das gespeicherte label (Name/Alias) wird gebraucht,
+# damit die Erholungs-Meldung lesbar bleibt, auch wenn das Geraet/der
+# Sensor zu diesem Zeitpunkt nicht mehr in der API-Antwort auftaucht.
 DEVICE_STATUS_STATE_FILE = BASE_DIR / "device_status_state.json"
 OFFLINE_POLL_INTERVAL_SECONDS = 120
 
@@ -117,10 +120,41 @@ def _load_notified_offline() -> dict:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         data = {}
-    data.setdefault("devices", [])
-    data.setdefault("new_devices", [])
-    data.setdefault("sensors", [])
+    for key in ("devices", "new_devices", "sensors"):
+        value = data.get(key)
+        if isinstance(value, list):
+            # Altes Format (nur IDs, kein Label) migrieren.
+            data[key] = {item_id: item_id for item_id in value}
+        elif not isinstance(value, dict):
+            data[key] = {}
     return data
+
+
+def _notify_state_changes(notified: dict, current: dict, label_for, alert_text, recovery_text) -> dict:
+    """
+    Vergleicht den zuletzt gemeldeten Zustand (notified: {id: label}) mit dem
+    aktuell auffaelligen Zustand (current: {id: row}) und verschickt fuer
+    jede Aenderung genau eine Telegram-Nachricht: einmalig bei neuem
+    Auftreten (alert_text) und einmalig bei Wegfall/Erholung (recovery_text).
+    Gibt den aktualisierten notified-Zustand zurueck.
+    """
+    for item_id in set(notified) - set(current):
+        label = notified[item_id]
+        ok, message = send_telegram_message(recovery_text(item_id, label))
+        if ok:
+            del notified[item_id]
+        else:
+            print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
+
+    for item_id, row in current.items():
+        if item_id not in notified:
+            ok, message = send_telegram_message(alert_text(item_id, row))
+            if ok:
+                notified[item_id] = label_for(row)
+            else:
+                print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
+
+    return notified
 
 
 def _save_notified_offline(data: dict) -> None:
@@ -230,9 +264,9 @@ def check_offline_devices_and_sensors() -> None:
     (notify=-1 & last_value_on > 15 Min, server-seitig gefiltert).
     """
     state = _load_notified_offline()
-    notified_devices = set(state["devices"])
-    notified_new_devices = set(state["new_devices"])
-    notified_sensors = set(state["sensors"])
+    notified_devices = state["devices"]
+    notified_new_devices = state["new_devices"]
+    notified_sensors = state["sensors"]
 
     try:
         device_client = IotDeviceClient()
@@ -249,33 +283,35 @@ def check_offline_devices_and_sensors() -> None:
         new_now = None
         offline_now = None
 
+    device_label = lambda row: row.get("name") or row["id"]
+
     if new_now is not None:
-        for device_id, row in new_now.items():
-            if device_id not in notified_new_devices:
-                text = (
-                    f"\U0001F195 Neues Geraet erkannt: {row.get('name') or device_id} "
-                    f"(ID {device_id}, {row.get('address') or 'keine Adresse'})"
-                )
-                ok, message = send_telegram_message(text)
-                if ok:
-                    notified_new_devices.add(device_id)
-                else:
-                    print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
-        notified_new_devices &= set(new_now.keys())
+        notified_new_devices = _notify_state_changes(
+            notified_new_devices,
+            new_now,
+            label_for=device_label,
+            alert_text=lambda device_id, row: (
+                f"\U0001F195 Neues Geraet erkannt: {row.get('name') or device_id} "
+                f"(ID {device_id}, {row.get('address') or 'keine Adresse'})"
+            ),
+            recovery_text=lambda device_id, label: (
+                f"✅ Geraet nicht mehr neu: {label} (ID {device_id})"
+            ),
+        )
 
     if offline_now is not None:
-        for device_id, row in offline_now.items():
-            if device_id not in notified_devices:
-                text = (
-                    f"\U0001F534 Geraet offline: {row.get('name') or device_id} "
-                    f"(ID {device_id}, {row.get('address') or 'keine Adresse'})"
-                )
-                ok, message = send_telegram_message(text)
-                if ok:
-                    notified_devices.add(device_id)
-                else:
-                    print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
-        notified_devices &= set(offline_now.keys())
+        notified_devices = _notify_state_changes(
+            notified_devices,
+            offline_now,
+            label_for=device_label,
+            alert_text=lambda device_id, row: (
+                f"\U0001F534 Geraet offline: {row.get('name') or device_id} "
+                f"(ID {device_id}, {row.get('address') or 'keine Adresse'})"
+            ),
+            recovery_text=lambda device_id, label: (
+                f"✅ Geraet wieder online: {label} (ID {device_id})"
+            ),
+        )
 
     try:
         sensor_client = IotSensorClient()
@@ -286,26 +322,25 @@ def check_offline_devices_and_sensors() -> None:
         stale_rows = None
 
     if stale_rows is not None:
-        for sensor_id, row in stale_rows.items():
-            if sensor_id not in notified_sensors:
-                description = row.get("description") or ""
-                text = (
-                    f"\U0001F507 Sensor still: {row.get('alias') or sensor_id}"
-                    f"{' - ' + description if description else ''} "
-                    f"(seit {row.get('last_value_on') or 'unbekannt'})"
-                )
-                ok, message = send_telegram_message(text)
-                if ok:
-                    notified_sensors.add(sensor_id)
-                else:
-                    print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
-        notified_sensors &= set(stale_rows.keys())
+        notified_sensors = _notify_state_changes(
+            notified_sensors,
+            stale_rows,
+            label_for=lambda row: row.get("alias") or row["id"],
+            alert_text=lambda sensor_id, row: (
+                f"\U0001F507 Sensor still: {row.get('alias') or sensor_id}"
+                f"{' - ' + row['description'] if row.get('description') else ''} "
+                f"(seit {row.get('last_value_on') or 'unbekannt'})"
+            ),
+            recovery_text=lambda sensor_id, label: (
+                f"✅ Sensor meldet wieder Werte: {label} (ID {sensor_id})"
+            ),
+        )
 
     _save_notified_offline(
         {
-            "devices": sorted(notified_devices),
-            "new_devices": sorted(notified_new_devices),
-            "sensors": sorted(notified_sensors),
+            "devices": notified_devices,
+            "new_devices": notified_new_devices,
+            "sensors": notified_sensors,
         }
     )
 
