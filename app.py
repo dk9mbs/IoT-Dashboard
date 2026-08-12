@@ -11,8 +11,11 @@ import webbrowser
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
 import requests
+
+load_dotenv()
 
 from iot_device_query import IotDeviceClient
 from iot_sensor_query import IotSensorClient
