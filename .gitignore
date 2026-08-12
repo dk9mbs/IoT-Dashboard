@@ -13,6 +13,9 @@ dash/
 pending_updates.json
 device_status_state.json
  
+# Session-Notizen (keine Quellcode-Doku)
+session-notes.md
+
 # Editor/OS
 .vscode/
 .idea/
