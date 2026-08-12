@@ -20,6 +20,7 @@ load_dotenv()
 from iot_device_query import IotDeviceClient
 from iot_sensor_query import IotSensorClient
 from shelly_update import trigger_shelly_update
+from telegram_notify import send_telegram_message
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -99,6 +100,32 @@ def get_pending_seconds(device_id: str) -> Optional[int]:
         return None
 
     return int(elapsed)
+
+
+# Merkt sich, fuer welche Geraete/Sensoren bereits eine Offline-Meldung per
+# Telegram verschickt wurde, damit jedes Ereignis nur einmalig meldet. Wird
+# aktualisiert, sobald ein Geraet/Sensor wieder verschwindet (online /
+# neuer Sensorwert) - erst dann kann ein erneutes Offline-Ereignis wieder
+# eine neue Meldung ausloesen.
+DEVICE_STATUS_STATE_FILE = BASE_DIR / "device_status_state.json"
+OFFLINE_POLL_INTERVAL_SECONDS = 120
+
+
+def _load_notified_offline() -> dict:
+    try:
+        with open(DEVICE_STATUS_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    data.setdefault("devices", [])
+    data.setdefault("new_devices", [])
+    data.setdefault("sensors", [])
+    return data
+
+
+def _save_notified_offline(data: dict) -> None:
+    with open(DEVICE_STATUS_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
 
 
 # Farbliche Markierung je nach status_id.
@@ -183,6 +210,117 @@ def extract_version_row(device: dict) -> Optional[dict]:
     )
 
     return row
+
+
+def check_offline_devices_and_sensors() -> None:
+    """
+    Prueft Geraete und Sensoren auf "offline"/"neu" und verschickt fuer jedes
+    NEU aufgetretene Ereignis genau eine Telegram-Nachricht.
+
+    fetch_devices() liefert Geraete, bei denen last_scan_on aelter als 10 Min.
+    ist UND notify=-1 gesetzt ist, ODER der Status 'new' ist (dieselbe
+    server-seitig gefilterte Logik wie fuer die Tabelle "auffaellige
+    Geraete"). Die 'new'-Faelle werden separat als "neues Geraet" gemeldet,
+    der Rest als "offline" - status_id wird von diesem Backend naemlich
+    nicht zuverlaessig auf 'offline' gesetzt, wenn ein Geraet nicht mehr
+    scannt, es bleibt z.B. auf 'active' stehen, waehrend last_scan_on
+    veraltet.
+
+    Ein Sensor gilt als offline/"still", wenn er in fetch_sensors() auftaucht
+    (notify=-1 & last_value_on > 15 Min, server-seitig gefiltert).
+    """
+    state = _load_notified_offline()
+    notified_devices = set(state["devices"])
+    notified_new_devices = set(state["new_devices"])
+    notified_sensors = set(state["sensors"])
+
+    try:
+        device_client = IotDeviceClient()
+        conspicuous_devices = device_client.fetch_devices()
+        conspicuous_rows = list(map(extract_row, conspicuous_devices))
+        new_now = {
+            row["id"]: row for row in conspicuous_rows if row.get("_status_raw") == "new"
+        }
+        offline_now = {
+            row["id"]: row for row in conspicuous_rows if row.get("_status_raw") != "new"
+        }
+    except (RuntimeError, requests.exceptions.RequestException) as exc:
+        print(f"[offline-check] Geraete-Abfrage fehlgeschlagen: {exc}")
+        new_now = None
+        offline_now = None
+
+    if new_now is not None:
+        for device_id, row in new_now.items():
+            if device_id not in notified_new_devices:
+                text = (
+                    f"\U0001F195 Neues Geraet erkannt: {row.get('name') or device_id} "
+                    f"(ID {device_id}, {row.get('address') or 'keine Adresse'})"
+                )
+                ok, message = send_telegram_message(text)
+                if ok:
+                    notified_new_devices.add(device_id)
+                else:
+                    print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
+        notified_new_devices &= set(new_now.keys())
+
+    if offline_now is not None:
+        for device_id, row in offline_now.items():
+            if device_id not in notified_devices:
+                text = (
+                    f"\U0001F534 Geraet offline: {row.get('name') or device_id} "
+                    f"(ID {device_id}, {row.get('address') or 'keine Adresse'})"
+                )
+                ok, message = send_telegram_message(text)
+                if ok:
+                    notified_devices.add(device_id)
+                else:
+                    print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
+        notified_devices &= set(offline_now.keys())
+
+    try:
+        sensor_client = IotSensorClient()
+        stale_sensors = sensor_client.fetch_sensors()
+        stale_rows = {row["id"]: row for row in map(extract_sensor_row, stale_sensors)}
+    except (RuntimeError, requests.exceptions.RequestException) as exc:
+        print(f"[offline-check] Sensor-Abfrage fehlgeschlagen: {exc}")
+        stale_rows = None
+
+    if stale_rows is not None:
+        for sensor_id, row in stale_rows.items():
+            if sensor_id not in notified_sensors:
+                description = row.get("description") or ""
+                text = (
+                    f"\U0001F507 Sensor still: {row.get('alias') or sensor_id}"
+                    f"{' - ' + description if description else ''} "
+                    f"(seit {row.get('last_value_on') or 'unbekannt'})"
+                )
+                ok, message = send_telegram_message(text)
+                if ok:
+                    notified_sensors.add(sensor_id)
+                else:
+                    print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
+        notified_sensors &= set(stale_rows.keys())
+
+    _save_notified_offline(
+        {
+            "devices": sorted(notified_devices),
+            "new_devices": sorted(notified_new_devices),
+            "sensors": sorted(notified_sensors),
+        }
+    )
+
+
+def offline_poll_loop() -> None:
+    """
+    Prueft in Dauerschleife auf Offline-Ereignisse, unabhaengig davon, ob
+    gerade jemand das Dashboard im Browser geoeffnet hat.
+    """
+    while True:
+        try:
+            check_offline_devices_and_sensors()
+        except Exception as exc:  # Hintergrundthread darf nicht abbrechen
+            print(f"[offline-check] Unerwarteter Fehler: {exc}")
+        time.sleep(OFFLINE_POLL_INTERVAL_SECONDS)
 
 
 @app.route("/")
@@ -300,4 +438,5 @@ def open_chrome():
 if __name__ == "__main__":
     # Chrome erst öffnen, nachdem der Server kurz Zeit hatte hochzufahren.
     #threading.Timer(1.0, open_chrome).start()
+    threading.Thread(target=offline_poll_loop, daemon=True).start()
     app.run(host=HOST, port=PORT, debug=True, use_reloader=False)
