@@ -7,6 +7,7 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+dash/
  
 # Laufzeit-Zustandsdateien des Dashboards (gerätespezifisch, kein Quellcode)
 pending_updates.json
