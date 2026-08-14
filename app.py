@@ -56,6 +56,19 @@ VERSION_COLUMNS = [
     ("version_available", "Verfügbare Version"),
 ]
 
+SENSOR_MINMAX_COLUMNS = [
+    ("id", "ID"),
+    ("alias", "Alias"),
+    ("description", "Beschreibung"),
+    ("last_value", "Letzter Wert"),
+    ("min_value", "Min."),
+    ("max_value", "Max."),
+    ("unit", "Einheit"),
+    ("last_value_on", "Letzte Meldung"),
+]
+
+SENSOR_MINMAX_DISPLAY_COLUMNS = SENSOR_MINMAX_COLUMNS + [("_direction", "Abweichung")]
+
 # Merkt sich pro Geräte-ID, wann zuletzt ein Update ausgelöst wurde.
 # Wird in einer JSON-Datei neben app.py gespeichert, damit der Zustand
 # auch einen Server-Neustart übersteht (nicht nur einen Seiten-Reload).
@@ -120,7 +133,7 @@ def _load_notified_offline() -> dict:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         data = {}
-    for key in ("devices", "new_devices", "sensors"):
+    for key in ("devices", "new_devices", "sensors", "minmax_sensors"):
         value = data.get(key)
         if isinstance(value, list):
             # Altes Format (nur IDs, kein Label) migrieren.
@@ -246,6 +259,32 @@ def extract_version_row(device: dict) -> Optional[dict]:
     return row
 
 
+def extract_out_of_range_sensor(sensor: dict) -> Optional[dict]:
+    """
+    Liefert die Sensor-Zeile zurück, wenn last_value außerhalb von
+    [min_value, max_value] liegt, sonst None (auch bei min_value ==
+    max_value, z.B. 0/0 - das gilt als exakter Grenzwert, jede Abweichung
+    zählt). Sensoren ohne (numerischen) last_value werden ignoriert.
+    """
+    row = extract_fields(sensor, SENSOR_MINMAX_COLUMNS)
+
+    try:
+        last_value = float(row.get("last_value"))
+        min_value = float(row.get("min_value"))
+        max_value = float(row.get("max_value"))
+    except (TypeError, ValueError):
+        return None
+
+    if last_value < min_value:
+        row["_direction"] = f"< Min. ({row['min_value']})"
+    elif last_value > max_value:
+        row["_direction"] = f"> Max. ({row['max_value']})"
+    else:
+        return None
+
+    return row
+
+
 def check_offline_devices_and_sensors() -> None:
     """
     Prueft Geraete und Sensoren auf "offline"/"neu" und verschickt fuer jedes
@@ -262,11 +301,16 @@ def check_offline_devices_and_sensors() -> None:
 
     Ein Sensor gilt als offline/"still", wenn er in fetch_sensors() auftaucht
     (notify=-1 & last_value_on > 15 Min, server-seitig gefiltert).
+
+    Ein Sensor gilt als Min/Max-Grenzwertverletzung, wenn last_value bei
+    einem notify=-1-Sensor außerhalb von [min_value, max_value] liegt
+    (siehe extract_out_of_range_sensor).
     """
     state = _load_notified_offline()
     notified_devices = state["devices"]
     notified_new_devices = state["new_devices"]
     notified_sensors = state["sensors"]
+    notified_minmax_sensors = state["minmax_sensors"]
 
     try:
         device_client = IotDeviceClient()
@@ -336,11 +380,40 @@ def check_offline_devices_and_sensors() -> None:
             ),
         )
 
+    try:
+        minmax_sensor_client = IotSensorClient()
+        notify_sensors = minmax_sensor_client.fetch_notify_sensors()
+        minmax_rows = {
+            row["id"]: row
+            for sensor in notify_sensors
+            if (row := extract_out_of_range_sensor(sensor)) is not None
+        }
+    except (RuntimeError, requests.exceptions.RequestException) as exc:
+        print(f"[offline-check] Sensor-Abfrage (Min/Max) fehlgeschlagen: {exc}")
+        minmax_rows = None
+
+    if minmax_rows is not None:
+        notified_minmax_sensors = _notify_state_changes(
+            notified_minmax_sensors,
+            minmax_rows,
+            label_for=lambda row: row.get("alias") or row["id"],
+            alert_text=lambda sensor_id, row: (
+                f"\U000026A0\U0000FE0F Sensor außerhalb Min/Max: {row.get('alias') or sensor_id}"
+                f"{' - ' + row['description'] if row.get('description') else ''} "
+                f"(aktuell {row.get('last_value') or 'unbekannt'} {row.get('unit') or ''}, "
+                f"{row.get('_direction') or ''})"
+            ),
+            recovery_text=lambda sensor_id, label: (
+                f"✅ Sensor wieder im Toleranzbereich: {label} (ID {sensor_id})"
+            ),
+        )
+
     _save_notified_offline(
         {
             "devices": notified_devices,
             "new_devices": notified_new_devices,
             "sensors": notified_sensors,
+            "minmax_sensors": notified_minmax_sensors,
         }
     )
 
@@ -386,6 +459,22 @@ def dashboard():
     except requests.exceptions.RequestException as exc:
         sensor_error = f"Fehler bei der Abfrage des REST-Service: {exc}"
 
+    minmax_error = None
+    minmax_rows = []
+
+    try:
+        minmax_sensor_client = IotSensorClient()
+        notify_sensors = minmax_sensor_client.fetch_notify_sensors()
+        minmax_rows = [
+            row
+            for sensor in notify_sensors
+            if (row := extract_out_of_range_sensor(sensor)) is not None
+        ]
+    except RuntimeError as exc:
+        minmax_error = str(exc)
+    except requests.exceptions.RequestException as exc:
+        minmax_error = f"Fehler bei der Abfrage des REST-Service: {exc}"
+
     try:
         version_client = IotDeviceClient()
         all_shelly_devices = version_client.fetch_all_shelly_devices()
@@ -404,6 +493,7 @@ def dashboard():
     new_count = sum(1 for row in rows if row.get("_status_raw") == "new")
     active_count = sum(1 for row in rows if row.get("_status_raw") == "active")
     sensor_stale_count = len(sensor_rows)
+    minmax_count = len(minmax_rows)
     version_outdated_count = len(version_rows)
 
     return render_template(
@@ -417,6 +507,10 @@ def dashboard():
         sensor_rows=sensor_rows,
         sensor_error=sensor_error,
         sensor_stale_count=sensor_stale_count,
+        sensor_minmax_columns=SENSOR_MINMAX_DISPLAY_COLUMNS,
+        sensor_minmax_rows=minmax_rows,
+        minmax_error=minmax_error,
+        minmax_count=minmax_count,
         version_columns=VERSION_COLUMNS,
         version_rows=version_rows,
         version_error=version_error,

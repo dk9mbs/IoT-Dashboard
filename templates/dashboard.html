@@ -16,6 +16,7 @@
     --muted: #64707A;
     --accent-stale: #C97A2B;
     --accent-fresh: #2B7A78;
+    --status-ok: #34A853;
     --status-new: #E0871F;
     --status-active: #D64545;
     --status-error: #7A2E2E;
@@ -100,7 +101,7 @@
 
   .tiles {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 14px;
     margin-bottom: 20px;
   }
@@ -120,9 +121,8 @@
     justify-content: space-between;
   }
 
-  .tile-new     { border-left-color: var(--status-new); }
-  .tile-active  { border-left-color: var(--status-active); }
-  .tile-alert   { border-left-color: var(--accent-stale); }
+  .tile-ok  { border-left-color: var(--status-ok); }
+  .tile-bad { border-left-color: var(--status-active); }
 
   .tile-label {
     font-family: 'JetBrains Mono', monospace;
@@ -139,9 +139,8 @@
     font-family: 'JetBrains Mono', monospace;
   }
 
-  .tile-new .tile-value     { color: var(--status-new); }
-  .tile-active .tile-value  { color: var(--status-active); }
-  .tile-alert .tile-value   { color: var(--accent-stale); }
+  .tile-ok .tile-value  { color: var(--status-ok); }
+  .tile-bad .tile-value { color: var(--status-active); }
 
   .tile-dot {
     width: 9px;
@@ -149,25 +148,59 @@
     border-radius: 50%;
   }
 
-  .tile-new .tile-dot     { background: var(--status-new); }
-  .tile-active .tile-dot {
+  .tile-ok .tile-dot  { background: var(--status-ok); }
+  .tile-bad .tile-dot {
     background: var(--status-active);
     animation: blink-dot 1s infinite;
   }
-  .tile-alert .tile-dot   { background: var(--accent-stale); }
 
-  .section-title {
+  details.section {
+    margin-top: 14px;
+  }
+
+  .wrap > details.section:first-of-type {
+    margin-top: 0;
+  }
+
+  summary.section-title {
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--muted);
-    margin: 28px 0 10px;
+    margin: 0 0 10px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 18px;
+    transition: border-color 0.15s ease, color 0.15s ease;
   }
 
-  .section-title:first-of-type { margin-top: 0; }
+  summary.section-title::-webkit-details-marker { display: none; }
 
-  tbody tr.tr-alert { border-left-color: var(--accent-stale); background: #FBF3EA; }
+  summary.section-title::after {
+    content: '▾';
+    display: inline-block;
+    font-size: 12px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+  }
+
+  details.section[open] > summary.section-title::after {
+    transform: rotate(180deg);
+  }
+
+  summary.section-title:hover {
+    color: var(--ink);
+    border-color: var(--muted);
+  }
 
   .panel {
     background: var(--panel);
@@ -224,32 +257,9 @@
   tbody tr.status-active  { border-left-color: var(--status-active); }
   tbody tr.status-error   { border-left-color: var(--status-error); background: #FBF1EE; }
   tbody tr.status-offline { border-left-color: var(--status-offline); background: #FBF1EE; }
+  tbody tr.status-alert   { border-left-color: var(--status-active); background: #FBF1EE; }
   tbody tr.status-disabled{ border-left-color: var(--status-disabled); }
   tbody tr.status-unknown { border-left-color: var(--status-unknown); }
-
-  .status-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-right: 8px;
-    vertical-align: middle;
-  }
-
-  .status-new     .status-dot { background: var(--status-new); }
-  .status-error   .status-dot { background: var(--status-error); }
-  .status-disabled .status-dot { background: var(--status-disabled); }
-  .status-unknown .status-dot { background: var(--status-unknown); }
-
-  .status-active .status-dot,
-  .status-offline .status-dot {
-    background: var(--status-active);
-    animation: blink-dot 1s infinite;
-  }
-
-  .status-offline .status-dot {
-    background: var(--status-offline);
-  }
 
   @keyframes blink-dot {
     0%, 100% { opacity: 1; }
@@ -348,28 +358,35 @@
     </header>
 
     <div class="tiles">
-      <div class="tile tile-new">
+      <div class="tile {{ 'tile-bad' if new_count > 0 else 'tile-ok' }}">
         <div>
           <div class="tile-label">Status: Neu</div>
           <div class="tile-value">{{ new_count }}</div>
         </div>
         <span class="tile-dot"></span>
       </div>
-      <div class="tile tile-active">
+      <div class="tile {{ 'tile-bad' if active_count > 0 else 'tile-ok' }}">
         <div>
           <div class="tile-label">Status: Offline</div>
           <div class="tile-value">{{ active_count }}</div>
         </div>
         <span class="tile-dot"></span>
       </div>
-      <div class="tile tile-alert">
+      <div class="tile {{ 'tile-bad' if sensor_stale_count > 0 else 'tile-ok' }}">
         <div>
           <div class="tile-label">Sensoren still</div>
           <div class="tile-value">{{ sensor_stale_count }}</div>
         </div>
         <span class="tile-dot"></span>
       </div>
-      <div class="tile tile-alert">
+      <div class="tile {{ 'tile-bad' if minmax_count > 0 else 'tile-ok' }}">
+        <div>
+          <div class="tile-label">Wert außerhalb Min/Max</div>
+          <div class="tile-value">{{ minmax_count }}</div>
+        </div>
+        <span class="tile-dot"></span>
+      </div>
+      <div class="tile {{ 'tile-bad' if version_outdated_count > 0 else 'tile-ok' }}">
         <div>
           <div class="tile-label">Updates verfügbar</div>
           <div class="tile-value">{{ version_outdated_count }}</div>
@@ -378,58 +395,27 @@
       </div>
     </div>
 
-    <div class="section-title">iot_device &middot; auffällige Geräte</div>
-    <div class="panel">
-      {% if error %}
-        <div class="error">{{ error }}</div>
-      {% elif rows|length == 0 %}
-        <div class="empty">Keine Geräte gefunden, die länger als 10 Minuten nicht gescannt wurden.</div>
-      {% else %}
-        <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              {% for field, label in columns %}
-                <th class="{{ 'mono-col' if field != 'name' else '' }}">{{ label }}</th>
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in rows %}
-              <tr class="{{ row._status_class }}" title="Status: {{ row._status_label }}">
-                {% for field, label in columns %}
-                  <td class="{{ 'mono' if field != 'name' else '' }}">
-                    {% if field == 'name' %}<span class="status-dot"></span>{% endif %}{{ row[field] }}
-                  </td>
-                {% endfor %}
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        </div>
-      {% endif %}
-    </div>
-
-    {% macro simple_table(cols, data, empty_message, error_message) %}
+    <details class="section" id="section-devices">
+      <summary class="section-title">iot_device &middot; auffällige Geräte</summary>
       <div class="panel">
-        {% if error_message %}
-          <div class="error">{{ error_message }}</div>
-        {% elif data|length == 0 %}
-          <div class="empty">{{ empty_message }}</div>
+        {% if error %}
+          <div class="error">{{ error }}</div>
+        {% elif rows|length == 0 %}
+          <div class="empty">Keine Geräte gefunden, die länger als 10 Minuten nicht gescannt wurden.</div>
         {% else %}
           <div class="table-scroll">
           <table>
             <thead>
               <tr>
-                {% for field, label in cols %}
+                {% for field, label in columns %}
                   <th class="mono-col">{{ label }}</th>
                 {% endfor %}
               </tr>
             </thead>
             <tbody>
-              {% for row in data %}
-                <tr class="tr-alert">
-                  {% for field, label in cols %}
+              {% for row in rows %}
+                <tr class="{{ row._status_class }}" title="Status: {{ row._status_label }}">
+                  {% for field, label in columns %}
                     <td class="mono">{{ row[field] }}</td>
                   {% endfor %}
                 </tr>
@@ -439,62 +425,137 @@
           </div>
         {% endif %}
       </div>
-    {% endmacro %}
+    </details>
 
-    <div class="section-title">iot_sensor &middot; notify=-1 &amp; last_value_on &ge; 15 min</div>
-    {{ simple_table(sensor_columns, sensor_rows,
-                     "Keine Sensoren gefunden, die länger als 15 Minuten keinen Wert gemeldet haben.",
-                     sensor_error) }}
-
-    <div class="section-title">iot_device &middot; Update verfügbar (version &ne; version_available)</div>
-    <div class="panel">
-      {% if version_error %}
-        <div class="error">{{ version_error }}</div>
-      {% elif version_rows|length == 0 %}
-        <div class="empty">Alle Shelly-Geräte sind auf der verfügbaren Version.</div>
-      {% else %}
-        <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              {% for field, label in version_columns %}
-                <th class="mono-col">{{ label }}</th>
-              {% endfor %}
-              <th class="mono-col">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in version_rows %}
-              <tr class="tr-alert">
-                {% for field, label in version_columns %}
-                  <td class="mono">{{ row[field] }}</td>
+    <details class="section" id="section-sensors-stale">
+      <summary class="section-title">iot_sensor &middot; notify=-1 &amp; last_value_on &ge; 15 min</summary>
+      <div class="panel">
+        {% if sensor_error %}
+          <div class="error">{{ sensor_error }}</div>
+        {% elif sensor_rows|length == 0 %}
+          <div class="empty">Keine Sensoren gefunden, die länger als 15 Minuten keinen Wert gemeldet haben.</div>
+        {% else %}
+          <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {% for field, label in sensor_columns %}
+                  <th class="mono-col">{{ label }}</th>
                 {% endfor %}
-                <td class="mono">
-                  {% if row._pending_seconds is not none %}
-                    <div class="update-pending">
-                      <span class="update-pending-dot"></span>
-                      Update läuft (seit {{ row._pending_seconds }}s)
-                    </div>
-                  {% else %}
-                    <button
-                      class="btn-update"
-                      onclick="updateFirmware(this, '{{ row.id }}', '{{ row._address }}')"
-                      {% if not row._address %}disabled title="Keine Adresse bekannt"{% endif %}
-                    >Update starten</button>
-                  {% endif %}
-                  <div class="update-status"></div>
-                </td>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        </div>
-      {% endif %}
-    </div>
+            </thead>
+            <tbody>
+              {% for row in sensor_rows %}
+                <tr class="status-alert">
+                  {% for field, label in sensor_columns %}
+                    <td class="mono">{{ row[field] }}</td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          </div>
+        {% endif %}
+      </div>
+    </details>
+
+    <details class="section" id="section-minmax">
+      <summary class="section-title">iot_sensor &middot; Wert außerhalb Min/Max</summary>
+      <div class="panel">
+        {% if minmax_error %}
+          <div class="error">{{ minmax_error }}</div>
+        {% elif sensor_minmax_rows|length == 0 %}
+          <div class="empty">Alle Sensoren liegen aktuell innerhalb ihres Min/Max-Bereichs.</div>
+        {% else %}
+          <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {% for field, label in sensor_minmax_columns %}
+                  <th class="mono-col">{{ label }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in sensor_minmax_rows %}
+                <tr class="status-alert">
+                  {% for field, label in sensor_minmax_columns %}
+                    <td class="mono">{{ row[field] }}</td>
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          </div>
+        {% endif %}
+      </div>
+    </details>
+
+    <details class="section" id="section-versions">
+      <summary class="section-title">iot_device &middot; Update verfügbar (version &ne; version_available)</summary>
+      <div class="panel">
+        {% if version_error %}
+          <div class="error">{{ version_error }}</div>
+        {% elif version_rows|length == 0 %}
+          <div class="empty">Alle Shelly-Geräte sind auf der verfügbaren Version.</div>
+        {% else %}
+          <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {% for field, label in version_columns %}
+                  <th class="mono-col">{{ label }}</th>
+                {% endfor %}
+                <th class="mono-col">Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in version_rows %}
+                <tr class="status-alert">
+                  {% for field, label in version_columns %}
+                    <td class="mono">{{ row[field] }}</td>
+                  {% endfor %}
+                  <td class="mono">
+                    {% if row._pending_seconds is not none %}
+                      <div class="update-pending">
+                        <span class="update-pending-dot"></span>
+                        Update läuft (seit {{ row._pending_seconds }}s)
+                      </div>
+                    {% else %}
+                      <button
+                        class="btn-update"
+                        onclick="updateFirmware(this, '{{ row.id }}', '{{ row._address }}')"
+                        {% if not row._address %}disabled title="Keine Adresse bekannt"{% endif %}
+                      >Update starten</button>
+                    {% endif %}
+                    <div class="update-status"></div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          </div>
+        {% endif %}
+      </div>
+    </details>
 
   </div>
 
   <script>
+    (function () {
+      // Merkt sich pro Sektion, ob sie auf-/zugeklappt ist, damit der
+      // automatische Seiten-Reload (alle 60s) das nicht zuruecksetzt.
+      document.querySelectorAll('details.section[id]').forEach(function (details) {
+        var key = 'section-open:' + details.id;
+        if (localStorage.getItem(key) === '1') {
+          details.open = true;
+        }
+        details.addEventListener('toggle', function () {
+          localStorage.setItem(key, details.open ? '1' : '0');
+        });
+      });
+    })();
+
     (function () {
       var seconds = 60;
       var el = document.getElementById('countdown');
