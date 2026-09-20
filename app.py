@@ -5,11 +5,12 @@ IotDeviceClient.fetch_devices() zurückliefert.
 """
 
 import json
+import os
 import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
@@ -21,6 +22,7 @@ from iot_device_query import IotDeviceClient
 from iot_sensor_query import IotSensorClient
 from shelly_update import trigger_shelly_update
 from telegram_notify import send_telegram_message
+from nextcloud_talk_notify import send_nextcloud_talk_message
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -143,29 +145,70 @@ def _load_notified_offline() -> dict:
     return data
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Telegram bleibt als Kanal erhalten, ist aber standardmaessig deaktiviert -
+# Benachrichtigungen laufen jetzt per Default ueber Nextcloud Talk. Ueber
+# TELEGRAM_ENABLED=true in der .env laesst sich Telegram wieder aktivieren
+# (auch parallel zu Nextcloud Talk).
+TELEGRAM_ENABLED = _env_flag("TELEGRAM_ENABLED", False)
+NEXTCLOUD_TALK_ENABLED = _env_flag("NEXTCLOUD_TALK_ENABLED", True)
+
+
+def send_notification(text: str) -> Tuple[bool, str]:
+    """
+    Verschickt eine Nachricht ueber alle aktivierten Kanaele. Gilt als
+    erfolgreich, sobald mindestens ein aktivierter Kanal erfolgreich war,
+    damit ein einzelner ausgefallener Kanal keine Endlos-Wiederholung
+    der Meldung bei jedem Poll-Zyklus ausloest.
+    """
+    channels = []
+    if TELEGRAM_ENABLED:
+        channels.append(("Telegram", send_telegram_message))
+    if NEXTCLOUD_TALK_ENABLED:
+        channels.append(("Nextcloud Talk", send_nextcloud_talk_message))
+
+    if not channels:
+        return False, "Keine Benachrichtigungskanaele aktiviert."
+
+    results = []
+    any_ok = False
+    for name, sender in channels:
+        ok, message = sender(text)
+        results.append(f"{name}: {message}")
+        any_ok = any_ok or ok
+
+    return any_ok, "; ".join(results)
+
+
 def _notify_state_changes(notified: dict, current: dict, label_for, alert_text, recovery_text) -> dict:
     """
     Vergleicht den zuletzt gemeldeten Zustand (notified: {id: label}) mit dem
     aktuell auffaelligen Zustand (current: {id: row}) und verschickt fuer
-    jede Aenderung genau eine Telegram-Nachricht: einmalig bei neuem
-    Auftreten (alert_text) und einmalig bei Wegfall/Erholung (recovery_text).
+    jede Aenderung genau eine Benachrichtigung: einmalig bei neuem Auftreten
+    (alert_text) und einmalig bei Wegfall/Erholung (recovery_text).
     Gibt den aktualisierten notified-Zustand zurueck.
     """
     for item_id in set(notified) - set(current):
         label = notified[item_id]
-        ok, message = send_telegram_message(recovery_text(item_id, label))
+        ok, message = send_notification(recovery_text(item_id, label))
         if ok:
             del notified[item_id]
         else:
-            print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
+            print(f"[offline-check] Benachrichtigung fehlgeschlagen: {message}")
 
     for item_id, row in current.items():
         if item_id not in notified:
-            ok, message = send_telegram_message(alert_text(item_id, row))
+            ok, message = send_notification(alert_text(item_id, row))
             if ok:
                 notified[item_id] = label_for(row)
             else:
-                print(f"[offline-check] Telegram-Versand fehlgeschlagen: {message}")
+                print(f"[offline-check] Benachrichtigung fehlgeschlagen: {message}")
 
     return notified
 
