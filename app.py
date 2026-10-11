@@ -610,5 +610,8 @@ def open_chrome():
 if __name__ == "__main__":
     # Chrome erst öffnen, nachdem der Server kurz Zeit hatte hochzufahren.
     #threading.Timer(1.0, open_chrome).start()
+    ok, message = send_notification("🚀 IoT-Dashboard gestartet")
+    if not ok:
+        print(f"[startup] Start-Benachrichtigung fehlgeschlagen: {message}")
     threading.Thread(target=offline_poll_loop, daemon=True).start()
     app.run(host=HOST, port=PORT, debug=True, use_reloader=False)

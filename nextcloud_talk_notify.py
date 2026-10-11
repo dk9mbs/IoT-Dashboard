@@ -39,8 +39,15 @@ def send_nextcloud_talk_message(text: str, timeout: float = 10.0) -> Tuple[bool,
         response = requests.post(
             url,
             auth=(username, app_password),
-            headers={"OCS-APIRequest": "true", "Accept": "application/json"},
-            data={"message": text},
+            headers={
+                "OCS-APIRequest": "true",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            # Als Formular-Daten (data=...) gesendete Nachrichten werden zwar
+            # im Chat angezeigt, loesen aber keine Mobile-Push-Benachrichtigung
+            # aus - nur mit JSON-Body funktioniert das zuverlaessig.
+            json={"message": text},
             timeout=timeout,
         )
         if response.status_code in (200, 201):
