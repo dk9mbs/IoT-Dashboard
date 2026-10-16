@@ -1,0 +1,41 @@
+{
+  "log_dir": ".",
+  "window_minutes": 60,
+  "known_macs_file": "known_macs.json",
+
+  "aps": [
+    { "name": "", "ip": "", "mac": "" }
+  ],
+
+  "ignore_macs": [],
+
+  "patterns": {
+    "auth_fail": "(auth\\w*\\s+fail|4-way handshake fail|wrong password|invalid (pmk|mic)|radius.*reject|eap.*fail)",
+    "deauth": "(deauth|disassoc)",
+    "rogue_ap": "rogue",
+    "mgmt_login_fail": "(login\\s+fail|failed to log\\s?in|invalid (user|password).*(ssh|web|http))",
+    "client_seen": "((?<!dis)(associated|connected)|\\bonline\\b)"
+  },
+
+  "scoring": {
+    "auth_fail":       { "per": 10, "penalty": 5, "cap": 25 },
+    "deauth_burst":    { "per_minute": 20, "penalty": 20 },
+    "unknown_mac":     { "penalty": 10, "cap": 30 },
+    "rogue_ap":        { "penalty": 40 },
+    "mgmt_login_fail": { "penalty": 15, "cap": 30 },
+    "unexpected_internet": { "penalty": 5, "cap": 20 },
+    "ap_silent":       { "minutes": 1440, "penalty": 10 }
+  },
+
+  "baseline": {
+    "points_each": 5,
+    "checks": {
+      "wpa3": true,
+      "pmf": true,
+      "guest_isolation": true,
+      "firmware_current": true
+    }
+  },
+
+  "thresholds": { "green": 80, "yellow": 50 }
+}

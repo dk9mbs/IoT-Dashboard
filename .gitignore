@@ -16,6 +16,11 @@ device_status_state.json
 # Session-Notizen (keine Quellcode-Doku)
 session-notes.md
 
+# Omada-Syslog-Agent: Betriebskonfiguration mit Netzwerk-/MAC-Daten,
+# nicht die .skelet-Vorlagen
+agents/omada_syslog/config.json
+agents/omada_syslog/known_macs.json
+
 # Editor/OS
 .vscode/
 .idea/
