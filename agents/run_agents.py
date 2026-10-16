@@ -20,6 +20,7 @@ Pro Agent:
 Weitere Aufrufe:
     python3 run_agents.py --list         Status aller Agenten anzeigen
     python3 run_agents.py --run nmap     Agenten sofort ausfuehren (auch wenn deaktiviert)
+    python3 run_agents.py --all          alle aktiven Agenten sofort ausfuehren
 """
 
 import argparse
@@ -155,6 +156,8 @@ def main():
     ap = argparse.ArgumentParser(description="Zentraler Runner fuer die IoT-Agenten")
     ap.add_argument("--config", default=str(BASE_DIR / "agents.json"))
     ap.add_argument("--run", metavar="NAME", help="Agenten sofort ausfuehren")
+    ap.add_argument("--all", action="store_true",
+                    help="alle aktiven Agenten sofort ausfuehren (Intervall egal)")
     ap.add_argument("--list", action="store_true", help="Status aller Agenten anzeigen")
     args = ap.parse_args()
 
@@ -169,6 +172,8 @@ def main():
         if args.run not in agents:
             sys.exit(f"Unbekannter Agent: {args.run} (bekannt: {', '.join(agents)})")
         todo = [args.run]
+    elif args.all:
+        todo = [n for n, a in agents.items() if a.get("enabled")]
     else:
         now = time.time()
         todo = [n for n, a in agents.items()
