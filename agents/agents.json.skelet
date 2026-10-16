@@ -1,0 +1,21 @@
+{
+  "log_dir": "logs",
+  "agents": {
+    "nmap": {
+      "enabled": true,
+      "every_minutes": 5,
+      "timeout_seconds": 240
+    },
+    "omada_syslog": {
+      "enabled": true,
+      "every_minutes": 60,
+      "timeout_seconds": 120
+    }
+  },
+  "rest": {
+    "url": "https://dk9mbs.de/api/v1.0/data/iot_sensor_data",
+    "apikey": "",
+    "namespace": "agents",
+    "timeout": 10
+  }
+}

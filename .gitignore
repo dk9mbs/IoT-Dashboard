@@ -21,8 +21,12 @@ session-notes.md
 agents/omada_syslog/config.json
 agents/omada_syslog/known_macs.json
 
-# nmap-Scan: Startskript mit REST-Zugangsdaten, nicht die .skelet-Vorlage
-agents/nmap/run_scan_v2.sh
+# nmap-Scan: Einstellungen mit REST-Zugangsdaten, nicht die .skelet-Vorlage
+agents/nmap/config.env
+
+# Agenten-Runner: Konfiguration mit API-Key sowie Logs/Sperrdateien
+agents/agents.json
+agents/logs/
 
 # Editor/OS
 .vscode/
