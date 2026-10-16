@@ -37,5 +37,12 @@
     }
   },
 
-  "thresholds": { "green": 80, "yellow": 50 }
+  "thresholds": { "green": 80, "yellow": 50 },
+
+  "rest": {
+    "url": "https://dk9mbs.de/api/v1.0/data/iot_sensor_data",
+    "apikey": "",
+    "namespace": "wlan.score",
+    "timeout": 10
+  }
 }

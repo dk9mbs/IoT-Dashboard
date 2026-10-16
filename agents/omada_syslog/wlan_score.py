@@ -4,9 +4,11 @@ wlan_score.py - Ermittelt einen WLAN-Sicherheitsscore (0-100) aus den
 Syslog-Dateien der Omada-Access-Points (eine Datei pro AP: <ip>.log).
 
 Aufruf:
-    python3 wlan_score.py --config config.json [--pretty]
+    python3 wlan_score.py --config config.json [--pretty] [--learn] [--push]
 
 Ausgabe: JSON auf stdout (Score, Ampel, Einzelwerte, Abzuege).
+Mit --push werden die Kennzahlen ("metrics") zusaetzlich als Datensaetze in
+die REST-Tabelle iot_sensor_data geschrieben (sensor_id = wlan_<kennzahl>).
 """
 
 import argparse
@@ -15,6 +17,8 @@ import ipaddress
 import json
 import re
 import sys
+import urllib.error
+import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -134,6 +138,30 @@ def learn_unknown(cfg: dict, unknown: dict) -> int:
         data = devices
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return len(unknown)
+
+
+def push_metrics(cfg: dict, metrics: dict) -> list:
+    """Schreibt jede Kennzahl als eigenen Datensatz nach iot_sensor_data.
+    Rueckgabe: Liste der Fehlermeldungen (leer = alles ok)."""
+    rest = cfg["rest"]
+    url = rest["url"].rstrip("/")  # POST an die Basis-URL ohne abschliessendes '/'
+    headers = {"Content-Type": "application/json", "apikey": rest["apikey"]}
+    errors = []
+    for sensor_id, value in metrics.items():
+        body = json.dumps({
+            "sensor_id": sensor_id,
+            "sensor_namespace": rest.get("namespace", "wlan.score"),
+            "sensor_value": value,
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=rest.get("timeout", 10)):
+                pass
+        except urllib.error.HTTPError as exc:
+            errors.append(f"{sensor_id}: HTTP {exc.code} {exc.read()[:200].decode(errors='replace')}")
+        except (urllib.error.URLError, OSError) as exc:
+            errors.append(f"{sensor_id}: {exc}")
+    return errors
 
 
 def capped(value: int, cap) -> int:
@@ -258,12 +286,30 @@ def compute_score(cfg: dict) -> dict:
     th = cfg["thresholds"]
     level = "gruen" if score >= th["green"] else "gelb" if score >= th["yellow"] else "rot"
 
+    # Numerische Kennzahlen fuer iot_sensor_data (sensor_value ist decimal):
+    # Listen/Dicts werden als Anzahl gemeldet, ueber die volle Menge statt Top-N
+    metrics = {
+        "wlan_score": score,
+        "wlan_auth_fail_total": auth_fail_total,
+        "wlan_auth_fail_top_macs": len(auth_fail_macs),
+        "wlan_deauth_max_per_minute": max_deauth,
+        "wlan_clients_seen": len(client_macs),
+        "wlan_unknown_macs": len(unknown_macs),
+        "wlan_internet_clients": len(internet_dst),
+        "wlan_unexpected_internet": len(unexpected_inet),
+        "wlan_rogue_ap_events": len(rogue_lines),
+        "wlan_mgmt_login_fail": mgmt_fail,
+        "wlan_silent_aps": len(silent_aps),
+        "wlan_baseline_missing": len(missing),
+    }
+
     return {
         "timestamp": now.isoformat(timespec="seconds"),
         "window_minutes": window,
         "score": score,
         "level": level,
         "penalties": penalties,
+        "metrics": metrics,
         "details": {
             "auth_fail_total": auth_fail_total,
             "auth_fail_top_macs": auth_fail_macs.most_common(5),
@@ -291,7 +337,10 @@ def main():
     ap.add_argument("--pretty", action="store_true", help="JSON eingerueckt ausgeben")
     ap.add_argument("--learn", action="store_true",
                     help="unbekannte MACs in die known_macs-Datei uebernehmen")
+    ap.add_argument("--push", action="store_true",
+                    help="Kennzahlen per REST nach iot_sensor_data schreiben")
     args = ap.parse_args()
+    push_errors = []
 
     try:
         cfg_path = Path(args.config).resolve()
@@ -304,11 +353,20 @@ def main():
         if args.learn:
             n = learn_unknown(cfg, result["details"]["unknown_macs"])
             print(f"{n} MAC(s) in {cfg['known_macs_file']} uebernommen", file=sys.stderr)
+        if args.push:
+            push_errors = push_metrics(cfg, result["metrics"])
+            ok = len(result["metrics"]) - len(push_errors)
+            print(f"{ok}/{len(result['metrics'])} Kennzahl(en) an {cfg['rest']['url']} gesendet",
+                  file=sys.stderr)
+            for err in push_errors:
+                print(f"  Fehler: {err}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         sys.exit(1)
 
     print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
+    if push_errors:
+        sys.exit(2)
 
 
 if __name__ == "__main__":
