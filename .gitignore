@@ -21,6 +21,9 @@ session-notes.md
 agents/omada_syslog/config.json
 agents/omada_syslog/known_macs.json
 
+# nmap-Scan: Startskript mit REST-Zugangsdaten, nicht die .skelet-Vorlage
+agents/nmap/run_scan_v2.sh
+
 # Editor/OS
 .vscode/
 .idea/
