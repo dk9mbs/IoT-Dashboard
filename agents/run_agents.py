@@ -38,6 +38,9 @@ from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR.parent / "common"))
+
+from agent_config import rest_settings  # noqa: E402
 TIMEOUT_EXIT = 124       # wie timeout(1)
 LOG_MAX_BYTES = 5 * 1024 * 1024
 
@@ -75,21 +78,23 @@ def rotate_log(log_path: Path) -> None:
 
 
 def push_status(cfg: dict, name: str, exit_code: int, duration: float) -> None:
-    rest = cfg.get("rest")
-    if not rest or not rest.get("apikey"):
-        return
+    try:
+        rest = rest_settings(cfg)
+    except RuntimeError:
+        return  # ohne REST-Zugang keine Status-Meldung
+    url = f"{rest['base_url']}/data/iot_sensor_data"
+    namespace = cfg["rest"].get("namespace", "agents")
     headers = {"Content-Type": "application/json", "apikey": rest["apikey"]}
     for sensor_id, value in ((f"agent_{name}_exit", exit_code),
                              (f"agent_{name}_duration", round(duration, 1))):
         body = json.dumps({
             "sensor_id": sensor_id,
-            "sensor_namespace": rest.get("namespace", "agents"),
+            "sensor_namespace": namespace,
             "sensor_value": value,
         }).encode("utf-8")
-        req = urllib.request.Request(rest["url"].rstrip("/"), data=body,
-                                     headers=headers, method="POST")
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=rest.get("timeout", 10)):
+            with urllib.request.urlopen(req, timeout=rest["timeout"]):
                 pass
         except (urllib.error.URLError, OSError) as exc:
             print(f"[{name}] Status-Meldung {sensor_id} fehlgeschlagen: {exc}", file=sys.stderr)
@@ -193,6 +198,8 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(Path(args.config).resolve())
+    # Agenten lesen ihre REST-Zugangsdaten aus derselben Datei (common/agent_config.py)
+    os.environ["IOT_AGENTS_CONFIG"] = str(Path(args.config).resolve())
     agents = cfg["agents"]
 
     if args.list:

@@ -18,7 +18,7 @@
     }
   },
   "rest": {
-    "url": "https://dk9mbs.de/api/v1.0/data/iot_sensor_data",
+    "base_url": "https://dk9mbs.de/api/v1.0",
     "apikey": "",
     "namespace": "agents",
     "timeout": 10

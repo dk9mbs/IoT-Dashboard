@@ -9,13 +9,15 @@ Voraussetzungen:
     - Für einige Scan-Typen (z.B. -O für OS-Erkennung) werden Root-Rechte benötigt (sudo)
 
 Nutzung:
-    python3 netzwerk_scan.py
-    python3 netzwerk_scan.py --netz 192.168.1.0/24
-    python3 netzwerk_scan.py --netz 192.168.1.0/24 --args "-O -sV"
-    python3 netzwerk_scan.py --netz 192.168.1.0/24 --rest-url http://localhost:5000/api/hosts
+    python3 iptest_v2.py
+    python3 iptest_v2.py --netz 192.168.1.0/24
+    python3 iptest_v2.py --netz 192.168.1.0/24 --args "-O -sV"
+    python3 iptest_v2.py --netz 192.168.1.0/24 --no-rest
 
-    Hinweis: Nur Hosts, deren Hostname mit "shelly" beginnt, werden per PUT an
-    "<rest-url>/<hostname>" gesendet.
+    REST-Zugang (URL, API-Key) kommt aus agents/agents.json; mit --rest-url /
+    --apikey lässt er sich überschreiben. Nur Hosts, deren Hostname mit
+    "shelly" beginnt, werden angelegt bzw. per PUT an "<rest-url>/<hostname>"
+    gesendet.
 """
 
 import argparse
@@ -24,6 +26,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 from zoneinfo import ZoneInfo
 
 try:
@@ -39,6 +42,9 @@ except ImportError:
     print("Fehler: Das Modul 'requests' ist nicht installiert.")
     print("Installation mit: pip install requests")
     sys.exit(1)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "common"))
+from agent_config import rest_settings  # noqa: E402  (REST-Zugang zentral aus agents.json)
 
 # Mitteleuropäische Zeitzone (berücksichtigt automatisch MEZ/MESZ-Umstellung)
 MITTELEUROPA = ZoneInfo("Europe/Berlin")
@@ -304,40 +310,53 @@ def erstelle_neuanlage_payload(daten: dict, product_id: str = None, wlan: dict =
     return payload
 
 
-def datensatz_existiert(rest_url: str, hostname: str, benutzername: str = None, passwort: str = None, timeout: int = 5) -> bool:
+def _rest_header(apikey: str) -> dict:
+    return {"apikey": apikey or ""}
+
+
+def datensatz_existiert(rest_url: str, hostname: str, apikey: str, timeout: int = 5):
     """
-    Prüft per GET-Request, ob für den angegebenen Hostname bereits ein Datensatz
-    beim REST-Service existiert. Gibt True zurück bei Status 200, sonst False.
+    Prüft per XML-SELECT an '<.../data>', ob für den Hostname bereits ein Datensatz
+    in der Tabelle (letzter Teil von rest_url, z.B. iot_device) existiert.
+    Ein GET auf '<rest_url>/<hostname>' braucht beim REST-Service zusätzlich
+    Leserechte auf api_http_header, die der API-Key-Benutzer nicht hat.
+    Gibt True/False zurück, oder None, wenn die Prüfung fehlschlug.
     """
-    ziel_url = f"{rest_url.rstrip('/')}/{hostname}"
-    header = {
-        "restapi_username": benutzername or "",
-        "restapi_password": passwort or "",
-    }
+    data_url, _, tabelle = rest_url.rstrip("/").rpartition("/")
+    xml = (
+        f'<restapi type="select"><table name={quoteattr(tabelle)} alias="a"/>'
+        f'<filter type="and"><condition field="id" value={quoteattr(hostname)} operator="eq" />'
+        f"</filter></restapi>"
+    )
+    header = {**_rest_header(apikey), "Content-Type": "application/xml"}
 
     try:
-        antwort = requests.get(ziel_url, headers=header, timeout=timeout)
-        vorhanden = antwort.status_code == 200
-        print(f"  -> GET an {ziel_url}: {'Datensatz vorhanden' if vorhanden else 'Datensatz nicht vorhanden'} (Status {antwort.status_code})")
+        antwort = requests.post(data_url, data=xml.encode("utf-8"), headers=header, timeout=timeout)
+        if not antwort.ok:
+            print(f"  -> Prüfung {tabelle}/{hostname} fehlgeschlagen (Status {antwort.status_code}): {antwort.text[:200]}")
+            return None
+        vorhanden = len(antwort.json()) > 0
+        print(f"  -> {tabelle}/{hostname}: {'Datensatz vorhanden' if vorhanden else 'Datensatz nicht vorhanden'}")
         return vorhanden
-    except requests.exceptions.RequestException as e:
-        print(f"  -> Fehler bei GET an {ziel_url}: {e}")
-        return False
+    except (requests.exceptions.RequestException, ValueError) as e:
+        print(f"  -> Fehler bei der Prüfung {tabelle}/{hostname}: {e}")
+        return None
 
 
-def sende_an_rest_service(daten: dict, rest_url: str, benutzername: str = None, passwort: str = None, timeout: int = 5) -> None:
+def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int = 5) -> None:
     """
     Fragt zunächst bei api.macvendors.com den Hersteller zur MAC-Adresse des Hosts ab
     (Feld product_id), direkt beim Shelly-Gerät die aktuellen WLAN-Daten (SSID, RSSI;
     Felder network_ssid, network_rssi), die installierte Firmware-Version (Feld version)
     sowie eine ggf. verfügbare neuere Firmware-Version (Feld version_available). Prüft
-    anschließend per GET, ob der Datensatz bereits existiert:
+    anschließend, ob der Datensatz bereits existiert:
     - Existiert er NICHT: Neuanlage per POST an die Basis-URL (ohne Hostname am Ende,
       ohne abschließenden '/'). Payload enthält zusätzlich name und vendor_id.
     - Existiert er bereits: Aktualisierung per PUT an '<Basis-URL>/<Hostname>'.
       Payload enthält: id, address, last_scan_on, product_id, network_ssid,
       network_rssi, version, version_available.
-    Zusätzlich werden die Header 'restapi_username' und 'restapi_password' mitgesendet.
+    - Schlägt die Prüfung fehl: nichts senden (sonst drohen doppelte Datensätze).
+    Angemeldet wird mit dem Header 'apikey'.
     """
     hostname = daten.get("hostname") or ""
     basis_url = rest_url.rstrip('/')
@@ -371,12 +390,12 @@ def sende_an_rest_service(daten: dict, rest_url: str, benutzername: str = None, 
     payload_update = erstelle_rest_payload(daten, hersteller, wlan, firmware_version, version_available)
     payload_neuanlage = erstelle_neuanlage_payload(daten, hersteller, wlan, firmware_version, version_available)
 
-    header = {
-        "restapi_username": benutzername or "",
-        "restapi_password": passwort or "",
-    }
+    header = _rest_header(apikey)
 
-    existiert_bereits = datensatz_existiert(rest_url, hostname, benutzername, passwort, timeout)
+    existiert_bereits = datensatz_existiert(rest_url, hostname, apikey, timeout)
+    if existiert_bereits is None:
+        print(f"  -> Übersprungen: {hostname} (Existenz-Prüfung fehlgeschlagen)")
+        return
 
     try:
         if existiert_bereits:
@@ -400,17 +419,16 @@ def sende_an_rest_service(daten: dict, rest_url: str, benutzername: str = None, 
         print(f"  -> Fehler beim Senden an {rest_url}: {e}")
 
 
-def scan_netzwerk(netzwerk: str, scan_argumente: str = "-sn", rest_url: str = None, rest_benutzername: str = None, rest_passwort: str = None) -> None:
+def scan_netzwerk(netzwerk: str, scan_argumente: str = "-sn", rest_url: str = None, apikey: str = None) -> None:
     """
     Führt einen nmap-Scan über das angegebene Netzwerk durch.
 
     :param netzwerk: Netzwerk in CIDR-Notation, z.B. '192.168.1.0/24'
     :param scan_argumente: nmap-Argumente. Standard '-sn' = Ping-Scan (nur Host-Discovery, kein Portscan)
-    :param rest_url: Optionale Basis-URL eines REST-Endpunkts. Jeder passende Host wird
-                      per PUT gesendet, wobei der Hostname an die URL angehängt wird
-                      (z.B. rest_url=http://host/api/hosts -> PUT http://host/api/hosts/shelly-plug1)
-    :param rest_benutzername: Wert für den Header 'restapi_username'
-    :param rest_passwort: Wert für den Header 'restapi_password'
+    :param rest_url: Optionale URL der REST-Tabelle (z.B. https://host/api/v1.0/data/iot_device).
+                      Jeder passende Host wird angelegt bzw. per PUT an '<rest_url>/<hostname>'
+                      aktualisiert. Ohne rest_url wird nur gescannt.
+    :param apikey: Wert für den Header 'apikey'
     """
     scanner = nmap.PortScanner()
 
@@ -455,7 +473,7 @@ def scan_netzwerk(netzwerk: str, scan_argumente: str = "-sn", rest_url: str = No
         # Host-Daten per PUT an den REST-Service senden, aber nur wenn der
         # Hostname mit "shelly" beginnt (Groß-/Kleinschreibung wird ignoriert)
         if rest_url and daten["hostname"] and daten["hostname"].lower().startswith("shelly"):
-            sende_an_rest_service(daten, rest_url, rest_benutzername, rest_passwort)
+            sende_an_rest_service(daten, rest_url, apikey)
 
         print("-" * 40)
 
@@ -486,30 +504,34 @@ def main():
         "-r",
         dest="rest_url",
         default=None,
-        help="Basis-URL eines REST-Endpunkts; passende Hosts (Hostname beginnt mit 'shelly') werden per PUT (JSON) gesendet, Hostname wird an die URL angehängt",
-    )
-
-    parser.add_argument(
-        "--rest-user",
-        dest="rest_benutzername",
-        default=None,
-        help="Wert für den Header 'restapi_username'",
+        help="URL der REST-Tabelle (Standard: <base_url>/data/iot_device aus agents/agents.json); "
+             "passende Hosts (Hostname beginnt mit 'shelly') werden angelegt bzw. aktualisiert",
     )
     parser.add_argument(
-        "--rest-pass",
-        dest="rest_passwort",
+        "--apikey",
         default=None,
-        help="Wert für den Header 'restapi_password'",
+        help="Wert für den Header 'apikey' (Standard: rest.apikey aus agents/agents.json)",
+    )
+    parser.add_argument(
+        "--no-rest",
+        action="store_true",
+        help="nur scannen, nichts an den REST-Service senden",
     )
 
     argumente = parser.parse_args()
-    scan_netzwerk(
-        argumente.netz,
-        argumente.scan_argumente,
-        argumente.rest_url,
-        argumente.rest_benutzername,
-        argumente.rest_passwort,
-    )
+    rest_url, apikey = argumente.rest_url, argumente.apikey
+    if argumente.no_rest:
+        rest_url = None
+    elif not rest_url or not apikey:
+        try:
+            rest = rest_settings()
+            rest_url = rest_url or f"{rest['base_url']}/data/iot_device"
+            apikey = apikey or rest["apikey"]
+        except (RuntimeError, OSError, ValueError) as e:
+            print(f"Warnung: kein REST-Zugang ({e}) - es wird nur gescannt.")
+            rest_url = None
+
+    scan_netzwerk(argumente.netz, argumente.scan_argumente, rest_url, apikey)
 
 
 if __name__ == "__main__":

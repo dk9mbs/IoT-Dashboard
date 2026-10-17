@@ -9,6 +9,8 @@ Aufruf:
 Ausgabe: JSON auf stdout (Score, Ampel, Einzelwerte, Abzuege).
 Mit --push werden die Kennzahlen ("metrics") zusaetzlich als Datensaetze in
 die REST-Tabelle iot_sensor_data geschrieben (sensor_id = wlan_<kennzahl>).
+URL und API-Key kommen zentral aus agents/agents.json, der Namespace aus
+dem rest-Block der config.json.
 """
 
 import argparse
@@ -23,7 +25,10 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-MAC_RE = re.compile(r"\b([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5})\b")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "common"))
+from agent_config import rest_settings  # noqa: E402  (REST-Zugang zentral aus agents.json)
+
+MAC_RE =re.compile(r"\b([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5})\b")
 
 # rsyslog-Zeilenformate: ISO (Debian-Standard) und klassisch ("Oct 15 12:00:00")
 ISO_LINE = re.compile(
@@ -140,22 +145,23 @@ def learn_unknown(cfg: dict, unknown: dict) -> int:
     return len(unknown)
 
 
-def push_metrics(cfg: dict, metrics: dict) -> list:
+def push_metrics(cfg: dict, metrics: dict, rest: dict) -> list:
     """Schreibt jede Kennzahl als eigenen Datensatz nach iot_sensor_data.
+    rest: zentrale Zugangsdaten (base_url, apikey, timeout) aus agents.json.
     Rueckgabe: Liste der Fehlermeldungen (leer = alles ok)."""
-    rest = cfg["rest"]
-    url = rest["url"].rstrip("/")  # POST an die Basis-URL ohne abschliessendes '/'
+    url = f"{rest['base_url']}/data/iot_sensor_data"
+    namespace = cfg.get("rest", {}).get("namespace", "wlan.score")
     headers = {"Content-Type": "application/json", "apikey": rest["apikey"]}
     errors = []
     for sensor_id, value in metrics.items():
         body = json.dumps({
             "sensor_id": sensor_id,
-            "sensor_namespace": rest.get("namespace", "wlan.score"),
+            "sensor_namespace": namespace,
             "sensor_value": value,
         }).encode("utf-8")
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=rest.get("timeout", 10)):
+            with urllib.request.urlopen(req, timeout=rest["timeout"]):
                 pass
         except urllib.error.HTTPError as exc:
             errors.append(f"{sensor_id}: HTTP {exc.code} {exc.read()[:200].decode(errors='replace')}")
@@ -354,9 +360,10 @@ def main():
             n = learn_unknown(cfg, result["details"]["unknown_macs"])
             print(f"{n} MAC(s) in {cfg['known_macs_file']} uebernommen", file=sys.stderr)
         if args.push:
-            push_errors = push_metrics(cfg, result["metrics"])
+            rest = rest_settings()
+            push_errors = push_metrics(cfg, result["metrics"], rest)
             ok = len(result["metrics"]) - len(push_errors)
-            print(f"{ok}/{len(result['metrics'])} Kennzahl(en) an {cfg['rest']['url']} gesendet",
+            print(f"{ok}/{len(result['metrics'])} Kennzahl(en) an {rest['base_url']} gesendet",
                   file=sys.stderr)
             for err in push_errors:
                 print(f"  Fehler: {err}", file=sys.stderr)

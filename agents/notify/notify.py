@@ -11,7 +11,8 @@ der Erholung:
   - Sensor still (notify=-1 & last_value_on > 15 Min., serverseitig gefiltert)
   - Sensorwert ausserhalb [min_value, max_value]
 
-Einstellungen und Zugangsdaten kommen aus config.env im selben Ordner
+REST-Zugang (URL, API-Key) kommt zentral aus agents/agents.json, die
+Kanaele (Nextcloud Talk, Telegram) aus config.env im selben Ordner
 (Vorlage: config.env.skelet).
 
 Aufruf:
@@ -35,6 +36,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(AGENT_DIR / "config.env")
 
+from agent_config import rest_settings  # noqa: E402
 from iot_device_query import IotDeviceClient  # noqa: E402
 from iot_rows import extract_out_of_range_sensor, extract_row, extract_sensor_row  # noqa: E402
 from iot_sensor_query import IotSensorClient  # noqa: E402
@@ -163,10 +165,18 @@ def check(notifier: Notifier) -> None:
     Schlaegt eine Abfrage fehl, bleibt der Zustand der betroffenen Kategorie
     unveraendert (keine falschen Erholungs-Meldungen).
     """
+    try:
+        rest = rest_settings()
+    except (RuntimeError, OSError, ValueError) as exc:
+        print(f"[notify] REST-Zugang nicht konfiguriert: {exc}")
+        notifier.failed = True
+        return
+    clients = {"apikey": rest["apikey"], "base_url": rest["base_url"]}
+
     state = load_state()
 
     try:
-        conspicuous_rows = list(map(extract_row, IotDeviceClient().fetch_devices()))
+        conspicuous_rows = list(map(extract_row, IotDeviceClient(**clients).fetch_devices()))
         new_now = {row["id"]: row for row in conspicuous_rows if row.get("_status_raw") == "new"}
         offline_now = {row["id"]: row for row in conspicuous_rows if row.get("_status_raw") != "new"}
     except (RuntimeError, requests.exceptions.RequestException) as exc:
@@ -205,7 +215,7 @@ def check(notifier: Notifier) -> None:
         )
 
     try:
-        stale_rows = {row["id"]: row for row in map(extract_sensor_row, IotSensorClient().fetch_sensors())}
+        stale_rows = {row["id"]: row for row in map(extract_sensor_row, IotSensorClient(**clients).fetch_sensors())}
     except (RuntimeError, requests.exceptions.RequestException) as exc:
         print(f"[notify] Sensor-Abfrage fehlgeschlagen: {exc}")
         notifier.failed = True
@@ -229,7 +239,7 @@ def check(notifier: Notifier) -> None:
     try:
         minmax_rows = {
             row["id"]: row
-            for sensor in IotSensorClient().fetch_notify_sensors()
+            for sensor in IotSensorClient(**clients).fetch_notify_sensors()
             if (row := extract_out_of_range_sensor(sensor)) is not None
         }
     except (RuntimeError, requests.exceptions.RequestException) as exc:

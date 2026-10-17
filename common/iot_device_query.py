@@ -5,13 +5,14 @@ letzte Scan älter als 10 Minuten ist UND notify=-1 gesetzt ist,
 ODER der Status 'new' ist.
 
 Endpunkt: https://dk9mbs.de/api/v1.0/data
-Auth:     Header restapi_username / restapi_password
+Auth:     Header apikey oder restapi_username / restapi_password
 """
 
-import os
 from typing import List, Optional
 
 import requests
+
+from rest_auth import rest_headers
 
 
 class IotDeviceClient:
@@ -45,26 +46,15 @@ class IotDeviceClient:
     </filter>
 </restapi>"""
 
-    def __init__(self, username: Optional[str] = None, password: Optional[str] = None):
-        self.username = username or os.environ.get("RESTAPI_USERNAME")
-        self.password = password or os.environ.get("RESTAPI_PASSWORD")
-
-        if not self.username or not self.password:
-            raise RuntimeError(
-                "Bitte die Umgebungsvariablen RESTAPI_USERNAME und "
-                "RESTAPI_PASSWORD setzen, oder Zugangsdaten übergeben."
-            )
-
-        self._headers = {
-            "Content-Type": "application/xml",
-            "restapi_username": self.username,
-            "restapi_password": self.password,
-        }
+    def __init__(self, username: Optional[str] = None, password: Optional[str] = None,
+                 apikey: Optional[str] = None, base_url: Optional[str] = None):
+        self.api_url = f"{base_url.rstrip('/')}/data" if base_url else self.API_URL
+        self._headers = rest_headers(username, password, apikey)
 
     def fetch_devices(self) -> List[dict]:
         """Fragt die Geräte ab und gibt die JSON-Antwort als Liste zurück."""
         response = requests.post(
-            self.API_URL, headers=self._headers, data=self.XML_PAYLOAD
+            self.api_url, headers=self._headers, data=self.XML_PAYLOAD
         )
         response.raise_for_status()
         return response.json()
@@ -72,7 +62,7 @@ class IotDeviceClient:
     def fetch_all_shelly_devices(self) -> List[dict]:
         """Fragt ALLE Shelly-Geräte ab, ohne last_scan_on-/status_id-Filter."""
         response = requests.post(
-            self.API_URL, headers=self._headers, data=self.XML_PAYLOAD_ALL_SHELLY
+            self.api_url, headers=self._headers, data=self.XML_PAYLOAD_ALL_SHELLY
         )
         response.raise_for_status()
         return response.json()
