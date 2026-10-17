@@ -3,7 +3,7 @@
 Verschickt Benachrichtigungen ueber die Telegram Bot API.
 
 Benoetigt TELEGRAM_BOT_TOKEN und TELEGRAM_CHAT_ID als Umgebungsvariablen
-(siehe .env).
+(Einstellungen des notify-Agenten, siehe notify.py).
 """
 
 import os

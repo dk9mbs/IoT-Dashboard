@@ -3,7 +3,8 @@
 Verschickt Benachrichtigungen ueber die Nextcloud Talk Chat-API (OCS).
 
 Benoetigt NEXTCLOUD_URL, NEXTCLOUD_USERNAME, NEXTCLOUD_APP_PASSWORD und
-NEXTCLOUD_TALK_ROOM_TOKEN als Umgebungsvariablen (siehe .env). Die
+NEXTCLOUD_TALK_ROOM_TOKEN als Umgebungsvariablen (Einstellungen des
+notify-Agenten, siehe notify.py). Die
 Anmeldung erfolgt ueber ein App-Passwort (Nextcloud-Einstellungen >
 Sicherheit > Geraete & Sitzungen), NICHT ueber das normale Passwort.
 Der Room-Token steht im Talk-Link der Unterhaltung

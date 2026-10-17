@@ -1,26 +1,10 @@
 {
-  "log_dir": "logs",
-  "agents": {
-    "nmap": {
-      "enabled": true,
-      "every_minutes": 5,
-      "timeout_seconds": 240
-    },
-    "omada_syslog": {
-      "enabled": true,
-      "every_minutes": 60,
-      "timeout_seconds": 120
-    },
-    "notify": {
-      "enabled": true,
-      "every_minutes": 2,
-      "timeout_seconds": 90
-    }
-  },
   "rest": {
     "base_url": "https://dk9mbs.de/api/v1.0",
     "apikey": "",
     "namespace": "agents",
     "timeout": 10
-  }
+  },
+  "host": "",
+  "log_dir": "logs"
 }

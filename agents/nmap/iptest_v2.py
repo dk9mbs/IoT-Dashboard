@@ -14,9 +14,10 @@ Nutzung:
     python3 iptest_v2.py --netz 192.168.1.0/24 --args "-O -sV"
     python3 iptest_v2.py --netz 192.168.1.0/24 --no-rest
 
-    REST-Zugang (URL, API-Key) gibt der Agenten-Runner aus agents/agents.json
-    mit (IOT_REST_*); mit --rest-url /
-    --apikey lässt er sich überschreiben. Nur Hosts, deren Hostname mit
+    REST-Zugang (IOT_REST_*) und Einstellungen (IOT_AGENT_SETTINGS, z.B.
+    {"netz": "192.168.2.0/24", "args": "-sn"}) gibt der Agenten-Runner mit;
+    mit --netz / --args / --rest-url /
+    --apikey lässt sich das überschreiben. Nur Hosts, deren Hostname mit
     "shelly" beginnt, werden angelegt bzw. per PUT an "<rest-url>/<hostname>"
     gesendet.
 """
@@ -44,7 +45,7 @@ except ImportError:
     print("Installation mit: pip install requests")
     sys.exit(1)
 
-from dk9mbs_iot.query.auth import rest_from_env  # REST-Zugang vom Agenten-Runner
+from dk9mbs_iot.agent import rest_from_env, settings_from_env  # vom Agenten-Runner
 
 # Mitteleuropäische Zeitzone (berücksichtigt automatisch MEZ/MESZ-Umstellung)
 MITTELEUROPA = ZoneInfo("Europe/Berlin")
@@ -485,16 +486,16 @@ def main():
     parser.add_argument(
         "--netz",
         "-n",
-        default="192.168.1.0/24",
-        help="Zu scannendes Netzwerk in CIDR-Notation (Standard: 192.168.1.0/24)",
+        default=None,
+        help="Zu scannendes Netzwerk in CIDR-Notation (Standard: Einstellung 'netz', sonst 192.168.1.0/24)",
     )
     parser.add_argument(
         "--args",
         "-a",
         dest="scan_argumente",
-        default="-sn",
+        default=None,
         help=(
-            "nmap-Argumente (Standard: '-sn' = reiner Ping-Scan/Host-Discovery). "
+            "nmap-Argumente (Standard: Einstellung 'args', sonst '-sn' = reiner Ping-Scan/Host-Discovery). "
             "Beispiele: '-sV' (Service-Erkennung), '-O' (OS-Erkennung, benötigt sudo), "
             "'-p 1-1000' (Portbereich)"
         ),
@@ -531,7 +532,12 @@ def main():
             print(f"Warnung: kein REST-Zugang ({e}) - es wird nur gescannt.")
             rest_url = None
 
-    scan_netzwerk(argumente.netz, argumente.scan_argumente, rest_url, apikey)
+    # Einstellungen zentral aus iot_agent_config (vom Runner), Kommandozeile hat Vorrang
+    settings = settings_from_env()
+    netz = argumente.netz or settings.get("netz") or "192.168.1.0/24"
+    scan_argumente = argumente.scan_argumente or settings.get("args") or "-sn"
+
+    scan_netzwerk(netz, scan_argumente, rest_url, apikey)
 
 
 if __name__ == "__main__":

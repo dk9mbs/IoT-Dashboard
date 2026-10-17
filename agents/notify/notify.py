@@ -11,9 +11,10 @@ der Erholung:
   - Sensor still (notify=-1 & last_value_on > 15 Min., serverseitig gefiltert)
   - Sensorwert ausserhalb [min_value, max_value]
 
-REST-Zugang (URL, API-Key) gibt der Agenten-Runner aus agents/agents.json
-mit (IOT_REST_*), die Kanaele (Nextcloud Talk, Telegram) aus config.env im selben Ordner
-(Vorlage: config.env.skelet).
+REST-Zugang (IOT_REST_*) und Einstellungen (IOT_AGENT_SETTINGS) gibt der
+Agenten-Runner mit. Die Einstellungen sind die Kanaele, mit denselben Namen
+wie frueher in config.env (Vorlage: settings.json.skelet), z.B.
+{"NEXTCLOUD_TALK_ENABLED": true, "NEXTCLOUD_URL": "...", "TELEGRAM_ENABLED": false}.
 
 Aufruf:
     python3 notify.py [--dry-run] [--test "Text"]
@@ -28,19 +29,20 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
+import requests
+from dk9mbs_iot.agent import rest_from_env, settings_from_env
+from dk9mbs_iot.query.device import IotDeviceClient
+from dk9mbs_iot.query.sensor import IotSensorClient
+from dk9mbs_iot.rows import extract_out_of_range_sensor, extract_row, extract_sensor_row
+
+from nextcloud_talk_notify import send_nextcloud_talk_message
+from telegram_notify import send_telegram_message
+
 AGENT_DIR = Path(__file__).resolve().parent
 
-import requests  # noqa: E402
-from dotenv import load_dotenv  # noqa: E402
-
-load_dotenv(AGENT_DIR / "config.env")
-
-from dk9mbs_iot.query.auth import rest_from_env  # noqa: E402
-from dk9mbs_iot.query.device import IotDeviceClient  # noqa: E402
-from dk9mbs_iot.query.sensor import IotSensorClient  # noqa: E402
-from dk9mbs_iot.rows import extract_out_of_range_sensor, extract_row, extract_sensor_row  # noqa: E402
-from nextcloud_talk_notify import send_nextcloud_talk_message  # noqa: E402
-from telegram_notify import send_telegram_message  # noqa: E402
+# Kanal-Einstellungen in die Umgebung, dort lesen sie die beiden Sender
+for _key, _value in settings_from_env().items():
+    os.environ[_key] = str(_value).lower() if isinstance(_value, bool) else str(_value)
 
 # Merkt sich als {id: label}, fuer welche Geraete/Sensoren bereits eine
 # Meldung verschickt wurde, damit jedes Ereignis nur einmalig meldet.

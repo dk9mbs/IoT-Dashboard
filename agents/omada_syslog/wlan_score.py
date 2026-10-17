@@ -4,13 +4,18 @@ wlan_score.py - Ermittelt einen WLAN-Sicherheitsscore (0-100) aus den
 Syslog-Dateien der Omada-Access-Points (eine Datei pro AP: <ip>.log).
 
 Aufruf:
-    python3 wlan_score.py --config config.json [--pretty] [--learn] [--push]
+    python3 wlan_score.py [--config settings.json] [--pretty] [--learn] [--push]
+
+Die Einstellungen (APs, Muster, Bewertung ...) kommen zentral aus
+iot_agent_config.settings und werden vom Runner als IOT_AGENT_SETTINGS
+mitgegeben (Vorlage: settings.json.skelet); --config liest sie stattdessen
+aus einer Datei.
 
 Ausgabe: JSON auf stdout (Score, Ampel, Einzelwerte, Abzuege).
 Mit --push werden die Kennzahlen ("metrics") zusaetzlich als Datensaetze in
 die REST-Tabelle iot_sensor_data geschrieben (sensor_id = wlan_<kennzahl>).
-URL und API-Key gibt der Agenten-Runner aus agents/agents.json mit
-(IOT_REST_*), der Namespace kommt aus dem rest-Block der config.json.
+URL und API-Key gibt der Agenten-Runner mit (IOT_REST_*), der Namespace
+kommt aus dem rest-Block der Einstellungen.
 """
 
 import argparse
@@ -25,7 +30,9 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from dk9mbs_iot.query.auth import rest_from_env  # REST-Zugang vom Agenten-Runner
+from dk9mbs_iot.agent import rest_from_env, settings_from_env  # vom Agenten-Runner
+
+AGENT_DIR = Path(__file__).resolve().parent
 
 MAC_RE =re.compile(r"\b([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5})\b")
 
@@ -338,7 +345,8 @@ def compute_score(cfg: dict) -> dict:
 
 def main():
     ap = argparse.ArgumentParser(description="WLAN-Sicherheitsscore aus Omada-Syslogs")
-    ap.add_argument("--config", default="config.json")
+    ap.add_argument("--config", default=None,
+                    help="Einstellungen aus dieser JSON-Datei statt vom Runner (IOT_AGENT_SETTINGS)")
     ap.add_argument("--pretty", action="store_true", help="JSON eingerueckt ausgeben")
     ap.add_argument("--learn", action="store_true",
                     help="unbekannte MACs in die known_macs-Datei uebernehmen")
@@ -348,12 +356,20 @@ def main():
     push_errors = []
 
     try:
-        cfg_path = Path(args.config).resolve()
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-        # relative Pfade beziehen sich auf den Ordner der Config (wichtig fuer Cron)
+        if args.config:
+            cfg_path = Path(args.config).resolve()
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            base_dir = cfg_path.parent
+        else:
+            # zentral aus iot_agent_config.settings, vom Runner mitgegeben
+            cfg = settings_from_env()
+            if not cfg:
+                raise RuntimeError("keine Einstellungen - ueber run_agents.py starten oder --config angeben")
+            base_dir = AGENT_DIR
+        # relative Pfade beziehen sich auf den Ordner der Config bzw. des Agenten
         for key in ("log_dir", "known_macs_file"):
             if not Path(cfg[key]).is_absolute():
-                cfg[key] = str(cfg_path.parent / cfg[key])
+                cfg[key] = str(base_dir / cfg[key])
         result = compute_score(cfg)
         if args.learn:
             n = learn_unknown(cfg, result["details"]["unknown_macs"])

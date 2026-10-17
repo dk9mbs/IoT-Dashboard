@@ -26,6 +26,11 @@ Weitere Aufrufe:
     python3 run_agents.py --run nmap     Agenten sofort ausfuehren (auch wenn deaktiviert)
     python3 run_agents.py --all          alle aktiven Agenten sofort ausfuehren
     python3 run_agents.py --daemon       dauerhaft laufen, jede Minute faellige Agenten starten
+    python3 run_agents.py --export-sql   bisherige lokale Konfiguration als SQL fuer die
+                                         zentralen Tabellen ausgeben (Umzug)
+
+Welche Agenten laufen, steht zentral in iot_agent_host / iot_agent_config
+(siehe agent_config.py); lokal in agents.json nur der REST-Zugang.
 """
 
 import argparse
@@ -44,7 +49,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
-from agent_config import rest_env, rest_settings  # noqa: E402  (agents/agent_config.py)
+from agent_config import agent_env, export_sql, resolve_agents, rest_settings  # noqa: E402
 
 TIMEOUT_EXIT = 124       # wie timeout(1)
 RUNNER_ERROR_EXIT = 125  # Runner konnte Sperr-/Log-/Statusdatei nicht schreiben
@@ -62,6 +67,8 @@ def load_config(path: Path) -> dict:
         log_dir = path.parent / log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     cfg["log_dir"] = log_dir
+    # Agenten zentral vom REST-Server (sonst Kopie bzw. lokaler Block), siehe agent_config.py
+    cfg["agents"], cfg["source"] = resolve_agents(cfg, log_dir)
     return cfg
 
 
@@ -144,10 +151,10 @@ def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
             log.flush()
             try:
                 # eigene Prozessgruppe, damit der Timeout auch Kindprozesse beendet
-                # REST-Zugang aus agents.json als IOT_REST_* an den Agenten geben
+                # REST-Zugang (IOT_REST_*) und Einstellungen (IOT_AGENT_SETTINGS) mitgeben
                 proc = subprocess.Popen(command, cwd=BASE_DIR, stdout=log,
                                         stderr=subprocess.STDOUT, start_new_session=True,
-                                        env={**os.environ, **rest_env(cfg)})
+                                        env={**os.environ, **agent_env(cfg, agent)})
                 try:
                     exit_code = proc.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
@@ -188,6 +195,7 @@ def fmt_seconds(seconds: float) -> str:
 
 def list_agents(cfg: dict) -> None:
     now = time.time()
+    print(f"Konfiguration: {cfg['source']}")
     for name, agent in cfg["agents"].items():
         lock_path = cfg["log_dir"] / f"{name}.lock"
         ts = last_start(lock_path)
@@ -218,7 +226,7 @@ def run_daemon(config_path: Path) -> None:
     """
     Dauerbetrieb: prueft zu jeder vollen Minute, welche Agenten faellig sind,
     und startet jeden in einem eigenen Thread - ein langer Scan haelt die
-    anderen Agenten nicht auf. agents.json wird jedes Mal neu gelesen, damit
+    anderen Agenten nicht auf. Die Konfiguration (zentral bzw. agents.json) wird jedes Mal neu gelesen, damit
     Aenderungen ohne Neustart wirken.
     """
     running = {}  # name -> Thread
@@ -232,9 +240,13 @@ def run_daemon(config_path: Path) -> None:
         print(f"{name}: {results.get(name)}", flush=True)
 
     print(f"Runner gestartet ({config_path})", flush=True)
+    source = None
     while True:
         try:
             cfg = load_config(config_path)
+            if cfg["source"] != source:  # Wechsel der Quelle einmal melden, nicht jede Minute
+                source = cfg["source"]
+                print(f"Konfiguration: {source}", flush=True)
             for name in due_agents(cfg):
                 if name in running and running[name].is_alive():
                     continue  # laeuft noch aus einer frueheren Minute
@@ -255,9 +267,15 @@ def main():
     ap.add_argument("--list", action="store_true", help="Status aller Agenten anzeigen")
     ap.add_argument("--daemon", action="store_true",
                     help="dauerhaft laufen und jede Minute faellige Agenten starten")
+    ap.add_argument("--export-sql", action="store_true",
+                    help="bisherige lokale Konfiguration als SQL fuer iot_agent_host/iot_agent_config ausgeben")
     args = ap.parse_args()
 
     config_path = Path(args.config).resolve()
+
+    if args.export_sql:
+        print(export_sql(json.loads(config_path.read_text(encoding="utf-8"))), end="")
+        return
 
     if args.daemon:
         run_daemon(config_path)
