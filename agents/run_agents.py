@@ -2,8 +2,10 @@
 """
 run_agents.py - Zentraler Runner fuer die Agenten unter agents/.
 
-Wird per Cron jede Minute gestartet und fuehrt jeden aktiven Agenten aus
-agents.json aus, dessen Intervall abgelaufen ist:
+Fuehrt jeden aktiven Agenten aus agents.json aus, dessen Intervall
+abgelaufen ist. Als Dienst (iot-agents.service, siehe install/install.sh)
+laeuft er mit --daemon und prueft selbst jede Minute; alternativ per Cron
+jede Minute ein einzelner Durchlauf:
 
     * * * * * python3 /pfad/zu/agents/run_agents.py
 
@@ -21,6 +23,7 @@ Weitere Aufrufe:
     python3 run_agents.py --list         Status aller Agenten anzeigen
     python3 run_agents.py --run nmap     Agenten sofort ausfuehren (auch wenn deaktiviert)
     python3 run_agents.py --all          alle aktiven Agenten sofort ausfuehren
+    python3 run_agents.py --daemon       dauerhaft laufen, jede Minute faellige Agenten starten
 """
 
 import argparse
@@ -188,6 +191,41 @@ def list_agents(cfg: dict) -> None:
               f"letzter Start: {last}  {'  '.join(info)}".rstrip())
 
 
+def due_agents(cfg: dict) -> list:
+    now = time.time()
+    return [n for n, a in cfg["agents"].items()
+            if a.get("enabled") and is_due(a, cfg["log_dir"] / f"{n}.lock", now)]
+
+
+def run_daemon(config_path: Path) -> None:
+    """
+    Dauerbetrieb: prueft zu jeder vollen Minute, welche Agenten faellig sind,
+    und startet jeden in einem eigenen Thread - ein langer Scan haelt die
+    anderen Agenten nicht auf. agents.json wird jedes Mal neu gelesen, damit
+    Aenderungen ohne Neustart wirken.
+    """
+    running = {}  # name -> Thread
+
+    def run_and_report(cfg, name, agent):
+        results = {}
+        run_agent(cfg, name, agent, results)
+        print(f"{name}: {results.get(name)}", flush=True)
+
+    print(f"Runner gestartet ({config_path})", flush=True)
+    while True:
+        try:
+            cfg = load_config(config_path)
+            for name in due_agents(cfg):
+                if name in running and running[name].is_alive():
+                    continue  # laeuft noch aus einer frueheren Minute
+                running[name] = threading.Thread(
+                    target=run_and_report, args=(cfg, name, cfg["agents"][name]), daemon=True)
+                running[name].start()
+        except Exception as exc:  # z.B. agents.json gerade halb gespeichert
+            print(f"Fehler im Runner: {exc}", file=sys.stderr, flush=True)
+        time.sleep(60 - time.time() % 60)  # bis zur naechsten vollen Minute
+
+
 def main():
     ap = argparse.ArgumentParser(description="Zentraler Runner fuer die IoT-Agenten")
     ap.add_argument("--config", default=str(BASE_DIR / "agents.json"))
@@ -195,11 +233,19 @@ def main():
     ap.add_argument("--all", action="store_true",
                     help="alle aktiven Agenten sofort ausfuehren (Intervall egal)")
     ap.add_argument("--list", action="store_true", help="Status aller Agenten anzeigen")
+    ap.add_argument("--daemon", action="store_true",
+                    help="dauerhaft laufen und jede Minute faellige Agenten starten")
     args = ap.parse_args()
 
-    cfg = load_config(Path(args.config).resolve())
+    config_path = Path(args.config).resolve()
     # Agenten lesen ihre REST-Zugangsdaten aus derselben Datei (common/agent_config.py)
-    os.environ["IOT_AGENTS_CONFIG"] = str(Path(args.config).resolve())
+    os.environ["IOT_AGENTS_CONFIG"] = str(config_path)
+
+    if args.daemon:
+        run_daemon(config_path)
+        return
+
+    cfg = load_config(config_path)
     agents = cfg["agents"]
 
     if args.list:
@@ -213,9 +259,7 @@ def main():
     elif args.all:
         todo = [n for n, a in agents.items() if a.get("enabled")]
     else:
-        now = time.time()
-        todo = [n for n, a in agents.items()
-                if a.get("enabled") and is_due(a, cfg["log_dir"] / f"{n}.lock", now)]
+        todo = due_agents(cfg)
 
     # parallel, damit ein langer Scan die anderen Agenten nicht aufhaelt
     results = {}

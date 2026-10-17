@@ -1,0 +1,28 @@
+# Vorlage fuer den systemd-Dienst der Agenten.
+# install/install.sh --agents ersetzt die Platzhalter und installiert die
+# Unit nach /etc/systemd/system/iot-agents.service.
+#   @ROOT_DIR@  Verzeichnis des Repos (mit agents/)
+#   @PYTHON@    Python-Interpreter des venv
+#   @USER@      Benutzer, unter dem die Agenten laufen (nmap braucht root
+#               fuer MAC-Adressen)
+#
+# Der Runner laeuft dauerhaft und startet jede Minute die faelligen Agenten
+# aus agents/agents.json - jeden in einem eigenen Thread, damit ein langer
+# Scan die anderen nicht aufhaelt.
+
+[Unit]
+Description=IoT-Agenten (run_agents.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT_DIR@/agents
+ExecStart=@PYTHON@ @ROOT_DIR@/agents/run_agents.py --daemon
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
