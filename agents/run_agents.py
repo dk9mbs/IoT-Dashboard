@@ -17,7 +17,9 @@ Pro Agent:
   - Timeout, der die ganze Prozessgruppe beendet (auch Kindprozesse)
   - eigene Logdatei <log_dir>/<name>.log
   - optional Meldung von Exit-Code und Laufzeit nach iot_sensor_data
-    (sensor_id agent_<name>_exit / agent_<name>_duration)
+    (sensor_id agent_<name>_exit / agent_<name>_duration); eigene Codes:
+    124 = Timeout, 125 = Runner-Fehler (z.B. keine Schreibrechte in log_dir),
+    127 = Befehl nicht startbar
 
 Weitere Aufrufe:
     python3 run_agents.py --list         Status aller Agenten anzeigen
@@ -45,6 +47,7 @@ sys.path.insert(0, str(BASE_DIR.parent / "common"))
 
 from agent_config import rest_settings  # noqa: E402
 TIMEOUT_EXIT = 124       # wie timeout(1)
+RUNNER_ERROR_EXIT = 125  # Runner konnte Sperr-/Log-/Statusdatei nicht schreiben
 LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -104,7 +107,19 @@ def push_status(cfg: dict, name: str, exit_code: int, duration: float) -> None:
 
 
 def run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
-    """Fuehrt einen Agenten aus, wenn er nicht schon laeuft. Ergebnis in results[name]."""
+    """Fuehrt einen Agenten aus, wenn er nicht schon laeuft. Ergebnis in results[name].
+    Kann der Runner seine Dateien nicht schreiben (z.B. nach Wechsel zwischen
+    root und normalem Benutzer), wird das als Exit 125 gemeldet statt still
+    abzubrechen."""
+    try:
+        _run_agent(cfg, name, agent, results)
+    except OSError as exc:
+        print(f"[{name}] Runner-Fehler: {exc}", file=sys.stderr, flush=True)
+        push_status(cfg, name, RUNNER_ERROR_EXIT, 0.0)
+        results[name] = f"exit={RUNNER_ERROR_EXIT} Runner-Fehler: {exc}"
+
+
+def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
     log_dir = cfg["log_dir"]
     lock_path = log_dir / f"{name}.lock"
     log_path = log_dir / f"{name}.log"
@@ -208,7 +223,10 @@ def run_daemon(config_path: Path) -> None:
 
     def run_and_report(cfg, name, agent):
         results = {}
-        run_agent(cfg, name, agent, results)
+        try:
+            run_agent(cfg, name, agent, results)
+        except Exception as exc:  # Thread soll den Fehler nicht verschlucken
+            results[name] = f"unerwarteter Fehler: {exc!r}"
         print(f"{name}: {results.get(name)}", flush=True)
 
     print(f"Runner gestartet ({config_path})", flush=True)

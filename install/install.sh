@@ -120,6 +120,17 @@ for svc in "${SERVICES[@]}"; do
       if crontab -l -u "$RUN_USER" 2>/dev/null | grep -q "run_agents.py"; then
         echo "Warnung: crontab von $RUN_USER startet run_agents.py noch - Eintrag entfernen (crontab -e -u $RUN_USER)" >&2
       fi
+      [ "$RUN_USER" = root ] || echo "Warnung: Agenten laufen als $RUN_USER - nmap liefert ohne root keine MAC-Adressen/Hersteller (dafuer --user root)" >&2
+      # Laufzeit- und Einstellungsdateien dem Dienst-Benutzer geben, damit ein
+      # frueherer Lauf als anderer Benutzer (z.B. root) den Dienst nicht aussperrt
+      mkdir -p "$ROOT_DIR/agents/logs"
+      chown -R "$RUN_USER:" "$ROOT_DIR/agents/logs"
+      for f in "$ROOT_DIR"/agents/agents.json "$ROOT_DIR"/agents/*/config.env "$ROOT_DIR"/agents/*/config.json \
+               "$ROOT_DIR"/agents/*/known_macs.json "$ROOT_DIR"/agents/*/vendor_cache.json \
+               "$ROOT_DIR"/agents/*/device_status_state.json; do
+        [ -e "$f" ] && chown "$RUN_USER:" "$f"
+      done
+      echo "Laufzeit- und Einstellungsdateien der Agenten gehoeren jetzt $RUN_USER"
       ;;
   esac
 
