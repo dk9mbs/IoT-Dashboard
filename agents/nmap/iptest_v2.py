@@ -279,8 +279,9 @@ def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None
     Host-Daten. Enthält: id (Hostname), address (IP-Adresse), last_scan_on
     (aktueller Zeitstempel, mitteleuropäische Zeit), product_id (Hersteller laut
     api.macvendors.com), network_ssid, network_rssi (direkt vom Gerät abgefragt),
-    version (aktuell installierte Firmware-Version) sowie version_available
-    (verfügbare neuere Firmware-Version, falls vorhanden).
+    version (aktuell installierte Firmware-Version), version_available
+    (verfügbare neuere Firmware-Version, falls vorhanden) sowie mac, wenn nmap
+    die MAC-Adresse ermitteln konnte.
     """
     wlan = wlan or {}
     payload = {
@@ -295,6 +296,10 @@ def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None
     # ohne ermittelten Hersteller den gespeicherten Wert nicht mit null ueberschreiben
     if product_id:
         payload["product_id"] = product_id
+    # MAC nur, wenn nmap sie ermitteln konnte (ohne root bzw. ausserhalb des
+    # eigenen Netzsegments liefert nmap keine) - sonst bleibt der gespeicherte Wert
+    if daten.get("mac"):
+        payload["mac"] = daten["mac"]
     return payload
 
 
@@ -355,7 +360,7 @@ def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int 
       ohne abschließenden '/'). Payload enthält zusätzlich name und vendor_id.
     - Existiert er bereits: Aktualisierung per PUT an '<Basis-URL>/<Hostname>'.
       Payload enthält: id, address, last_scan_on, product_id, network_ssid,
-      network_rssi, version, version_available.
+      network_rssi, version, version_available und mac (nur wenn ermittelt).
     - Schlägt die Prüfung fehl: nichts senden (sonst drohen doppelte Datensätze).
     Angemeldet wird mit dem Header 'apikey'.
     """
@@ -401,16 +406,13 @@ def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int 
     try:
         if existiert_bereits:
             print(f"  -> Aktualisiere: {hostname}")
-            antwort = requests.put(ziel_url_put, json=payload_update, headers=header, timeout=timeout)
-            methode = "PUT"
-            ziel_url = ziel_url_put
+            methode, ziel_url, payload = "PUT", ziel_url_put, payload_update
         else:
             print(f"  -> Lege neu an: {hostname}")
             # Beim Anlegen (POST) wird der Hostname NICHT an die URL angehängt
             # und die Basis-URL darf nicht mit '/' enden.
-            antwort = requests.post(basis_url, json=payload_neuanlage, headers=header, timeout=timeout)
-            methode = "POST"
-            ziel_url = basis_url
+            methode, ziel_url, payload = "POST", basis_url, payload_neuanlage
+        antwort = requests.request(methode, ziel_url, json=payload, headers=header, timeout=timeout)
 
         if antwort.ok:
             print(f"  -> {methode} an {ziel_url} erfolgreich (Status {antwort.status_code})")
