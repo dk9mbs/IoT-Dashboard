@@ -8,7 +8,6 @@ ausgelöste Firmware-Update-Knopf.
 """
 
 import json
-import sys
 import time
 import webbrowser
 from pathlib import Path
@@ -20,11 +19,9 @@ import requests
 
 load_dotenv()
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
-
-from iot_device_query import IotDeviceClient
-from iot_sensor_query import IotSensorClient
-from iot_rows import (
+from dk9mbs_iot.query.device import IotDeviceClient
+from dk9mbs_iot.query.sensor import IotSensorClient
+from dk9mbs_iot.rows import (
     COLUMNS,
     SENSOR_COLUMNS,
     SENSOR_MINMAX_COLUMNS,

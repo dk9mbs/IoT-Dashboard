@@ -9,8 +9,8 @@ Aufruf:
 Ausgabe: JSON auf stdout (Score, Ampel, Einzelwerte, Abzuege).
 Mit --push werden die Kennzahlen ("metrics") zusaetzlich als Datensaetze in
 die REST-Tabelle iot_sensor_data geschrieben (sensor_id = wlan_<kennzahl>).
-URL und API-Key kommen zentral aus agents/agents.json, der Namespace aus
-dem rest-Block der config.json.
+URL und API-Key gibt der Agenten-Runner aus agents/agents.json mit
+(IOT_REST_*), der Namespace kommt aus dem rest-Block der config.json.
 """
 
 import argparse
@@ -25,8 +25,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "common"))
-from agent_config import rest_settings  # noqa: E402  (REST-Zugang zentral aus agents.json)
+from dk9mbs_iot.query.auth import rest_from_env  # REST-Zugang vom Agenten-Runner
 
 MAC_RE =re.compile(r"\b([0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5})\b")
 
@@ -147,7 +146,7 @@ def learn_unknown(cfg: dict, unknown: dict) -> int:
 
 def push_metrics(cfg: dict, metrics: dict, rest: dict) -> list:
     """Schreibt jede Kennzahl als eigenen Datensatz nach iot_sensor_data.
-    rest: zentrale Zugangsdaten (base_url, apikey, timeout) aus agents.json.
+    rest: Zugangsdaten (base_url, apikey, timeout) vom Agenten-Runner.
     Rueckgabe: Liste der Fehlermeldungen (leer = alles ok)."""
     url = f"{rest['base_url']}/data/iot_sensor_data"
     namespace = cfg.get("rest", {}).get("namespace", "wlan.score")
@@ -360,7 +359,7 @@ def main():
             n = learn_unknown(cfg, result["details"]["unknown_macs"])
             print(f"{n} MAC(s) in {cfg['known_macs_file']} uebernommen", file=sys.stderr)
         if args.push:
-            rest = rest_settings()
+            rest = rest_from_env()
             push_errors = push_metrics(cfg, result["metrics"], rest)
             ok = len(result["metrics"]) - len(push_errors)
             print(f"{ok}/{len(result['metrics'])} Kennzahl(en) an {rest['base_url']} gesendet",

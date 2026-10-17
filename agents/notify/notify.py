@@ -11,8 +11,8 @@ der Erholung:
   - Sensor still (notify=-1 & last_value_on > 15 Min., serverseitig gefiltert)
   - Sensorwert ausserhalb [min_value, max_value]
 
-REST-Zugang (URL, API-Key) kommt zentral aus agents/agents.json, die
-Kanaele (Nextcloud Talk, Telegram) aus config.env im selben Ordner
+REST-Zugang (URL, API-Key) gibt der Agenten-Runner aus agents/agents.json
+mit (IOT_REST_*), die Kanaele (Nextcloud Talk, Telegram) aus config.env im selben Ordner
 (Vorlage: config.env.skelet).
 
 Aufruf:
@@ -29,17 +29,16 @@ from pathlib import Path
 from typing import Tuple
 
 AGENT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(AGENT_DIR.parent.parent / "common"))
 
 import requests  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(AGENT_DIR / "config.env")
 
-from agent_config import rest_settings  # noqa: E402
-from iot_device_query import IotDeviceClient  # noqa: E402
-from iot_rows import extract_out_of_range_sensor, extract_row, extract_sensor_row  # noqa: E402
-from iot_sensor_query import IotSensorClient  # noqa: E402
+from dk9mbs_iot.query.auth import rest_from_env  # noqa: E402
+from dk9mbs_iot.query.device import IotDeviceClient  # noqa: E402
+from dk9mbs_iot.query.sensor import IotSensorClient  # noqa: E402
+from dk9mbs_iot.rows import extract_out_of_range_sensor, extract_row, extract_sensor_row  # noqa: E402
 from nextcloud_talk_notify import send_nextcloud_talk_message  # noqa: E402
 from telegram_notify import send_telegram_message  # noqa: E402
 
@@ -166,7 +165,7 @@ def check(notifier: Notifier) -> None:
     unveraendert (keine falschen Erholungs-Meldungen).
     """
     try:
-        rest = rest_settings()
+        rest = rest_from_env()
     except (RuntimeError, OSError, ValueError) as exc:
         print(f"[notify] REST-Zugang nicht konfiguriert: {exc}")
         notifier.failed = True

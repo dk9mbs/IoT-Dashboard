@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import requests
 
-from rest_auth import rest_headers
+from .auth import rest_headers
 
 
 class IotSensorClient:

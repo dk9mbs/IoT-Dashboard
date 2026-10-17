@@ -43,9 +43,9 @@ from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(BASE_DIR.parent / "common"))
 
-from agent_config import rest_settings  # noqa: E402
+from agent_config import rest_env, rest_settings  # noqa: E402  (agents/agent_config.py)
+
 TIMEOUT_EXIT = 124       # wie timeout(1)
 RUNNER_ERROR_EXIT = 125  # Runner konnte Sperr-/Log-/Statusdatei nicht schreiben
 LOG_MAX_BYTES = 5 * 1024 * 1024
@@ -144,8 +144,10 @@ def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
             log.flush()
             try:
                 # eigene Prozessgruppe, damit der Timeout auch Kindprozesse beendet
+                # REST-Zugang aus agents.json als IOT_REST_* an den Agenten geben
                 proc = subprocess.Popen(command, cwd=BASE_DIR, stdout=log,
-                                        stderr=subprocess.STDOUT, start_new_session=True)
+                                        stderr=subprocess.STDOUT, start_new_session=True,
+                                        env={**os.environ, **rest_env(cfg)})
                 try:
                     exit_code = proc.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
@@ -256,8 +258,6 @@ def main():
     args = ap.parse_args()
 
     config_path = Path(args.config).resolve()
-    # Agenten lesen ihre REST-Zugangsdaten aus derselben Datei (common/agent_config.py)
-    os.environ["IOT_AGENTS_CONFIG"] = str(config_path)
 
     if args.daemon:
         run_daemon(config_path)

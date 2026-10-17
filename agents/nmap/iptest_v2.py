@@ -14,7 +14,8 @@ Nutzung:
     python3 iptest_v2.py --netz 192.168.1.0/24 --args "-O -sV"
     python3 iptest_v2.py --netz 192.168.1.0/24 --no-rest
 
-    REST-Zugang (URL, API-Key) kommt aus agents/agents.json; mit --rest-url /
+    REST-Zugang (URL, API-Key) gibt der Agenten-Runner aus agents/agents.json
+    mit (IOT_REST_*); mit --rest-url /
     --apikey lässt er sich überschreiben. Nur Hosts, deren Hostname mit
     "shelly" beginnt, werden angelegt bzw. per PUT an "<rest-url>/<hostname>"
     gesendet.
@@ -43,8 +44,7 @@ except ImportError:
     print("Installation mit: pip install requests")
     sys.exit(1)
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "common"))
-from agent_config import rest_settings  # noqa: E402  (REST-Zugang zentral aus agents.json)
+from dk9mbs_iot.query.auth import rest_from_env  # REST-Zugang vom Agenten-Runner
 
 # Mitteleuropäische Zeitzone (berücksichtigt automatisch MEZ/MESZ-Umstellung)
 MITTELEUROPA = ZoneInfo("Europe/Berlin")
@@ -504,13 +504,13 @@ def main():
         "-r",
         dest="rest_url",
         default=None,
-        help="URL der REST-Tabelle (Standard: <base_url>/data/iot_device aus agents/agents.json); "
+        help="URL der REST-Tabelle (Standard: $IOT_REST_BASE_URL/data/iot_device vom Runner); "
              "passende Hosts (Hostname beginnt mit 'shelly') werden angelegt bzw. aktualisiert",
     )
     parser.add_argument(
         "--apikey",
         default=None,
-        help="Wert für den Header 'apikey' (Standard: rest.apikey aus agents/agents.json)",
+        help="Wert für den Header 'apikey' (Standard: $IOT_REST_APIKEY vom Runner)",
     )
     parser.add_argument(
         "--no-rest",
@@ -524,7 +524,7 @@ def main():
         rest_url = None
     elif not rest_url or not apikey:
         try:
-            rest = rest_settings()
+            rest = rest_from_env()
             rest_url = rest_url or f"{rest['base_url']}/data/iot_device"
             apikey = apikey or rest["apikey"]
         except (RuntimeError, OSError, ValueError) as e:

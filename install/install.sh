@@ -2,7 +2,8 @@
 # Richtet das gemeinsame venv ein und installiert die gewaehlten Dienste.
 #
 # 1. Legt das venv an, falls es fehlt (Standard: .venv im Repo-Root), und
-#    installiert per pip dashboard/requirements.txt sowie die
+#    installiert per pip den gemeinsamen Code (common/, dk9mbs-iot),
+#    dashboard/requirements.txt sowie die
 #    requirements.txt aller Agenten (agents/*/requirements.txt).
 # 2. Installiert nur die angegebenen Dienste als systemd-Units:
 #      --dashboard  iot-dashboard.service  (Weboberflaeche, dashboard/app.py)
@@ -84,6 +85,10 @@ if [ "$MODE" != print ]; then
   fi
   OWNER="$(stat -c %U "$VENV")"
   as_user "$OWNER" "$PYTHON" -m pip install --quiet --upgrade pip
+  # gemeinsamer Code zuerst, editierbar: Aenderungen in common/ gelten sofort.
+  # Bewusst nicht in den requirements.txt, sonst wuerde pip ihn ggf. auf PyPI suchen.
+  echo "Installiere common/ (dk9mbs-iot)"
+  as_user "$OWNER" "$PYTHON" -m pip install --quiet -e "$ROOT_DIR/common"
   for req in "$APP_DIR/requirements.txt" "$ROOT_DIR"/agents/*/requirements.txt; do
     [ -f "$req" ] || continue
     echo "Installiere ${req#"$ROOT_DIR"/}"
