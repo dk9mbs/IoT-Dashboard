@@ -32,6 +32,9 @@ agents/logs/
 .vscode/
 .idea/
 .DS_Store
+*.swp
+*.swo
+*~
 
 
 # nmap-Scan: Cache der Hersteller pro MAC-Prefix (wird automatisch angelegt)
