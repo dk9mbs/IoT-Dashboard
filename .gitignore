@@ -6,8 +6,8 @@
 __pycache__/
 *.pyc
 venv/
+# gemeinsames venv fuer Dashboard und Agenten (install/install.sh)
 .venv/
-dash/
  
 # Laufzeit-Zustandsdateien des Dashboards (gerätespezifisch, kein Quellcode)
 pending_updates.json

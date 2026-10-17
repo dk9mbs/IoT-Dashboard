@@ -1,0 +1,2 @@
+python-nmap
+requests>=2.31

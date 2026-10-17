@@ -1,7 +1,7 @@
 # Vorlage fuer den systemd-Dienst des IoT-Dashboards.
-# install.sh ersetzt die Platzhalter und installiert die Unit nach
+# install/install.sh ersetzt die Platzhalter und installiert die Unit nach
 # /etc/systemd/system/iot-dashboard.service.
-#   @REPO_DIR@  Verzeichnis dieses Repos
+#   @APP_DIR@   Verzeichnis des Dashboards (mit app.py)
 #   @PYTHON@    Python-Interpreter des venv (mit Flask, requests, python-dotenv)
 #   @USER@      Benutzer, unter dem das Dashboard laeuft
 
@@ -13,8 +13,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=@USER@
-WorkingDirectory=@REPO_DIR@
-ExecStart=@PYTHON@ @REPO_DIR@/app.py
+WorkingDirectory=@APP_DIR@
+ExecStart=@PYTHON@ @APP_DIR@/app.py
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=10
