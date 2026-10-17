@@ -19,9 +19,11 @@ Nutzung:
 """
 
 import argparse
+import json
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 try:
@@ -80,6 +82,31 @@ def host_zu_dict(host: str, host_info) -> dict:
 # Zeitstempel (float, time.time()) der letzten Anfrage an api.macvendors.com,
 # um den Mindestabstand von 1 Sekunde zwischen Anfragen einzuhalten.
 _letzte_macvendors_anfrage = 0.0
+
+# Dauerhafter Cache der Hersteller pro OUI (erste 3 Bytes der MAC), damit
+# api.macvendors.com (max. 1000 Anfragen/Tag) nur fuer neue Hersteller gefragt wird.
+VENDOR_CACHE_DATEI = Path(__file__).resolve().parent / "vendor_cache.json"
+_vendor_cache = None
+# nach erschoepftem Rate-Limit die API fuer den Rest des Laufs nicht mehr fragen
+_macvendors_gesperrt = False
+
+
+def _lade_vendor_cache() -> dict:
+    global _vendor_cache
+    if _vendor_cache is None:
+        try:
+            _vendor_cache = json.loads(VENDOR_CACHE_DATEI.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _vendor_cache = {}
+    return _vendor_cache
+
+
+def _speichere_vendor_cache() -> None:
+    try:
+        VENDOR_CACHE_DATEI.write_text(json.dumps(_vendor_cache, indent=2, sort_keys=True) + "\n",
+                                      encoding="utf-8")
+    except OSError as e:
+        print(f"  -> Warnung: Hersteller-Cache konnte nicht gespeichert werden: {e}")
 
 
 def shelly_update_verfuegbar(ip: str, timeout: int = 3) -> str:
@@ -181,14 +208,22 @@ def shelly_wlan_daten(ip: str, timeout: int = 3) -> dict:
 def hersteller_von_macvendors(mac: str, timeout: int = 5, max_versuche: int = 3) -> str:
     """
     Fragt bei api.macvendors.com den Hersteller zu einer MAC-Adresse ab.
+    Bereits bekannte OUIs kommen aus dem Cache (vendor_cache.json), ohne Anfrage.
     Hält dabei automatisch einen Mindestabstand von 1 Sekunde zur vorherigen Anfrage ein
     (Rate-Limit der kostenlosen API) und versucht es bei Status 429 mit steigender
     Wartezeit erneut (bis zu max_versuche mal).
     Gibt den Herstellernamen als String zurück, oder None falls nicht ermittelbar.
     """
-    global _letzte_macvendors_anfrage
+    global _letzte_macvendors_anfrage, _macvendors_gesperrt
 
     if not mac:
+        return None
+
+    oui = mac.upper().replace("-", ":")[:8]
+    cache = _lade_vendor_cache()
+    if oui in cache:
+        return cache[oui]  # None = laut API unbekannter Hersteller
+    if _macvendors_gesperrt:
         return None
 
     url = f"https://api.macvendors.com/{mac}"
@@ -204,9 +239,13 @@ def hersteller_von_macvendors(mac: str, timeout: int = 5, max_versuche: int = 3)
             _letzte_macvendors_anfrage = time.time()
 
             if antwort.status_code == 200:
-                return antwort.text.strip()
+                cache[oui] = antwort.text.strip()
+                _speichere_vendor_cache()
+                return cache[oui]
             elif antwort.status_code == 404:
                 # Hersteller für diese MAC-Adresse nicht bekannt
+                cache[oui] = None
+                _speichere_vendor_cache()
                 return None
             elif antwort.status_code == 429:
                 wartezeit = versuch * 2  # 2s, 4s, 6s ...
@@ -221,7 +260,9 @@ def hersteller_von_macvendors(mac: str, timeout: int = 5, max_versuche: int = 3)
             print(f"  -> Fehler bei Abfrage von api.macvendors.com für MAC {mac}: {e}")
             return None
 
-    print(f"  -> Kein Hersteller ermittelt (Rate-Limit trotz {max_versuche} Versuchen) für MAC {mac}")
+    print(f"  -> Kein Hersteller ermittelt (Rate-Limit trotz {max_versuche} Versuchen) für MAC {mac}, "
+          f"api.macvendors.com wird in diesem Lauf nicht mehr gefragt")
+    _macvendors_gesperrt = True
     return None
 
 
@@ -235,16 +276,19 @@ def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None
     (verfügbare neuere Firmware-Version, falls vorhanden).
     """
     wlan = wlan or {}
-    return {
+    payload = {
         "id": daten.get("hostname"),
         "address": daten.get("ip"),
         "last_scan_on": datetime.now(MITTELEUROPA).strftime("%Y-%m-%d %H:%M:%S"),
-        "product_id": product_id,
         "network_ssid": wlan.get("ssid"),
         "network_rssi": wlan.get("rssi") if wlan.get("rssi") is not None else 0,
         "version": firmware_version,
         "version_available": version_available,
     }
+    # ohne ermittelten Hersteller den gespeicherten Wert nicht mit null ueberschreiben
+    if product_id:
+        payload["product_id"] = product_id
+    return payload
 
 
 def erstelle_neuanlage_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None, version_available: str = None) -> dict:
@@ -302,6 +346,9 @@ def sende_an_rest_service(daten: dict, rest_url: str, benutzername: str = None, 
     hersteller = hersteller_von_macvendors(daten.get("mac"))
     if hersteller:
         print(f"  -> Hersteller laut macvendors.com: {hersteller}")
+    elif daten.get("vendor"):
+        hersteller = daten["vendor"]
+        print(f"  -> Hersteller laut nmap: {hersteller}")
 
     wlan = shelly_wlan_daten(daten.get("ip"))
     if wlan.get("ssid"):

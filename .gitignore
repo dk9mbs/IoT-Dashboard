@@ -33,3 +33,6 @@ agents/logs/
 .idea/
 .DS_Store
 
+
+# nmap-Scan: Cache der Hersteller pro MAC-Prefix (wird automatisch angelegt)
+agents/nmap/vendor_cache.json
