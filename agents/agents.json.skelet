@@ -10,6 +10,11 @@
       "enabled": true,
       "every_minutes": 60,
       "timeout_seconds": 120
+    },
+    "notify": {
+      "enabled": true,
+      "every_minutes": 2,
+      "timeout_seconds": 90
     }
   },
   "rest": {
