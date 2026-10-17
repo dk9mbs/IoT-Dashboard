@@ -135,9 +135,30 @@ def run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
                 exit_code = 127
             duration = time.monotonic() - start
             log.write(f"===== {now_str()} ende: exit={exit_code} dauer={duration:.1f}s\n")
+        # Ergebnis des letzten Laufs fuer --list
+        (log_dir / f"{name}.status").write_text(json.dumps(
+            {"exit": exit_code, "duration": round(duration, 1), "end": time.time()}))
 
     push_status(cfg, name, exit_code, duration)
     results[name] = f"exit={exit_code} dauer={duration:.1f}s"
+
+
+def is_running(lock_path: Path) -> bool:
+    """True, wenn ein Runner die Sperre des Agenten gerade haelt."""
+    if not lock_path.exists():
+        return False
+    with open(lock_path) as lock:
+        try:
+            # geteilte Sperre kollidiert nur mit der exklusiven eines laufenden Agenten
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    return False
+
+
+def fmt_seconds(seconds: float) -> str:
+    return f"{seconds:.0f} s" if seconds < 60 else f"{seconds / 60:.0f} min"
 
 
 def list_agents(cfg: dict) -> None:
@@ -147,9 +168,19 @@ def list_agents(cfg: dict) -> None:
         ts = last_start(lock_path)
         last = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "nie"
         state = "aktiv" if agent.get("enabled") else "aus"
-        due = "faellig" if agent.get("enabled") and is_due(agent, lock_path, now) else ""
+        info = []
+        if is_running(lock_path):
+            info.append(f"laeuft seit {fmt_seconds(now - ts)}")
+        else:
+            try:
+                st = json.loads((cfg["log_dir"] / f"{name}.status").read_text())
+                info.append(f"exit={st['exit']} ({st['duration']}s)")
+            except (OSError, ValueError, KeyError):
+                pass
+            if agent.get("enabled") and is_due(agent, lock_path, now):
+                info.append("faellig")
         print(f"{name:15} {state:5} alle {agent.get('every_minutes', 60):>4} min  "
-              f"letzter Start: {last}  {due}")
+              f"letzter Start: {last}  {'  '.join(info)}".rstrip())
 
 
 def main():
