@@ -18,9 +18,11 @@ Nutzung:
     {"netz": "192.168.2.0/24", "args": "-sn"}) gibt der Agenten-Runner mit;
     mit --netz / --args / --rest-url /
     --apikey lässt sich das überschreiben. Jedes gefundene Gerät wird in
-    iot_device angelegt bzw. aktualisiert (ID: Hostname, sonst MAC). Shellys
-    (Hostname beginnt mit "shelly") bekommen den Hersteller shelly und zusätzlich
-    WLAN-/Firmware-Daten vom Gerät, alle anderen den Hersteller dk9mbs.
+    iot_device angelegt bzw. aktualisiert (ID: MAC-Adresse, Hostname in host_name).
+    Shellys (Hostname beginnt mit "shelly") behalten den Hostnamen als ID, bekommen
+    den Hersteller shelly und zusätzlich WLAN-/Firmware-Daten vom Gerät, alle
+    anderen den Hersteller dk9mbs. Den Namen (name) setzt nmap nur bei der
+    Neuanlage, danach wird er manuell gepflegt.
 """
 
 import argparse
@@ -284,17 +286,23 @@ def ist_shelly(daten: dict) -> bool:
 
 
 def geraete_id(daten: dict):
-    """ID in iot_device: Hostname, ohne Hostname die MAC-Adresse (None, wenn beides fehlt)."""
-    return daten.get("hostname") or daten.get("mac")
+    """
+    ID in iot_device: bei Shellys der Hostname (enthält die MAC, daran hängen
+    Dashboard und Sensoren), sonst die MAC-Adresse. None, wenn sie fehlt.
+    """
+    if ist_shelly(daten):
+        return daten.get("hostname")
+    return daten.get("mac")
 
 
 def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None,
                           version_available: str = None, shelly: bool = True) -> dict:
     """
     Erstellt das JSON-Payload für den PUT-Aufruf (Aktualisierung) aus den vollständigen
-    Host-Daten. Enthält: id (Hostname, sonst MAC), address (IP-Adresse), last_scan_on
+    Host-Daten. Enthält: id (siehe geraete_id), address (IP-Adresse), last_scan_on
     (aktueller Zeitstempel, mitteleuropäische Zeit), product_id (Hersteller laut
-    api.macvendors.com) und mac, wenn nmap die MAC-Adresse ermitteln konnte.
+    api.macvendors.com), mac und host_name, wenn nmap sie ermitteln konnte.
+    name ist nicht enthalten - der wird manuell gepflegt.
     Nur bei Shellys zusätzlich network_ssid, network_rssi (direkt vom Gerät abgefragt),
     version (aktuell installierte Firmware-Version) und version_available
     (verfügbare neuere Firmware-Version, falls vorhanden).
@@ -319,6 +327,9 @@ def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None
     # eigenen Netzsegments liefert nmap keine) - sonst bleibt der gespeicherte Wert
     if daten.get("mac"):
         payload["mac"] = daten["mac"]
+    # Hostname ebenso nur, wenn bekannt (DNS/DHCP liefert nicht immer einen)
+    if daten.get("hostname"):
+        payload["host_name"] = daten["hostname"]
     return payload
 
 
@@ -326,10 +337,11 @@ def erstelle_neuanlage_payload(daten: dict, product_id: str = None, wlan: dict =
                                version_available: str = None, shelly: bool = True) -> dict:
     """
     Erstellt das JSON-Payload für den POST-Aufruf (Neuanlage): wie beim PUT, dazu
-    name (Hostname, sonst MAC) und vendor_id ('shelly' bzw. HERSTELLER_SONSTIGE).
+    name (Vorbelegung: Hostname, sonst ID) und vendor_id ('shelly' bzw.
+    HERSTELLER_SONSTIGE).
     """
     payload = erstelle_rest_payload(daten, product_id, wlan, firmware_version, version_available, shelly)
-    payload["name"] = geraete_id(daten)
+    payload["name"] = daten.get("hostname") or geraete_id(daten)
     payload["vendor_id"] = "shelly" if shelly else HERSTELLER_SONSTIGE
     return payload
 
@@ -388,7 +400,8 @@ def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int 
     installierte Firmware-Version und eine ggf. verfügbare neuere Version. Danach:
     - Datensatz vorhanden (gesucht über MAC, sonst ID): PUT an '<Basis-URL>/<ID>'.
     - Nicht vorhanden: POST an die Basis-URL (ohne ID, ohne abschließenden '/'),
-      zusätzlich mit name und vendor_id ('shelly', sonst HERSTELLER_SONSTIGE).
+      zusätzlich mit name (Vorbelegung) und vendor_id ('shelly', sonst
+      HERSTELLER_SONSTIGE).
     - Suche fehlgeschlagen: nichts senden (sonst drohen doppelte Datensätze).
     Angemeldet wird mit dem Header 'apikey'.
     """
@@ -458,7 +471,7 @@ def scan_netzwerk(netzwerk: str, scan_argumente: str = "-sn", rest_url: str = No
     :param netzwerk: Netzwerk in CIDR-Notation, z.B. '192.168.1.0/24'
     :param scan_argumente: nmap-Argumente. Standard '-sn' = Ping-Scan (nur Host-Discovery, kein Portscan)
     :param rest_url: Optionale URL der REST-Tabelle (z.B. https://host/api/v1.0/data/iot_device).
-                      Jeder passende Host wird angelegt bzw. per PUT an '<rest_url>/<hostname>'
+                      Jeder passende Host wird angelegt bzw. per PUT an '<rest_url>/<id>'
                       aktualisiert. Ohne rest_url wird nur gescannt.
     :param apikey: Wert für den Header 'apikey'
     """
@@ -502,13 +515,15 @@ def scan_netzwerk(netzwerk: str, scan_argumente: str = "-sn", rest_url: str = No
             for p in daten["ports"]:
                 print(f"  {p['port']}/{p['protokoll']}  {p['dienst']}")
 
-        # Jedes Gerät in iot_device eintragen bzw. aktualisieren - ID ist der
-        # Hostname, ohne Hostname die MAC; ohne beides lässt es sich nicht zuordnen
+        # Jedes Gerät in iot_device eintragen bzw. aktualisieren - ID ist die MAC
+        # (Shellys: Hostname); ohne sie lässt sich das Gerät nicht sicher zuordnen
+        # (nmap sieht keine MAC ausserhalb des eigenen Netzsegments und fuer den
+        # scannenden Rechner selbst)
         if rest_url:
             if geraete_id(daten):
                 sende_an_rest_service(daten, rest_url, apikey)
             else:
-                print("  -> Übersprungen: weder Hostname noch MAC-Adresse bekannt")
+                print("  -> Übersprungen: MAC-Adresse nicht bekannt")
 
         print("-" * 40)
 
