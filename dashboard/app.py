@@ -48,6 +48,34 @@ VERSION_COLUMNS = [
 
 SENSOR_MINMAX_DISPLAY_COLUMNS = SENSOR_MINMAX_COLUMNS + [("_direction", "Abweichung")]
 
+# Kachel "WLAN Sicherheit": Wert des Sensors wlan_score (Agent omada_syslog).
+# Ampel wie dessen Standard-Schwellen (thresholds: green 80, yellow 50).
+WLAN_SCORE_SENSOR_ID = "wlan_score"
+WLAN_SCORE_GREEN = 80
+WLAN_SCORE_YELLOW = 50
+
+
+def wlan_score_tile() -> dict:
+    """Wert, Stand und Farbe fuer die Kachel; value None, wenn nicht ermittelbar."""
+    tile = {"value": None, "since": None, "css": "tile-neutral"}
+    try:
+        sensor = IotSensorClient().fetch_sensor(WLAN_SCORE_SENSOR_ID)
+    except (RuntimeError, requests.exceptions.RequestException):
+        return tile
+    if not sensor:
+        return tile
+    fields = extract_fields(sensor, [("last_value", ""), ("last_value_on", "")])
+    try:
+        value = float(fields["last_value"])
+    except (TypeError, ValueError):
+        return tile
+    value = int(round(value))  # Anzeige und Farbe nach demselben Wert
+    tile["value"] = value
+    tile["since"] = fields["last_value_on"]
+    tile["css"] = ("tile-ok" if value >= WLAN_SCORE_GREEN
+                   else "tile-warn" if value >= WLAN_SCORE_YELLOW else "tile-bad")
+    return tile
+
 # Merkt sich pro Geräte-ID, wann zuletzt ein Update ausgelöst wurde.
 # Wird in einer JSON-Datei neben app.py gespeichert, damit der Zustand
 # auch einen Server-Neustart übersteht (nicht nur einen Seiten-Reload).
@@ -199,6 +227,7 @@ def dashboard():
         version_rows=version_rows,
         version_error=version_error,
         version_outdated_count=version_outdated_count,
+        wlan_score=wlan_score_tile(),
     )
 
 

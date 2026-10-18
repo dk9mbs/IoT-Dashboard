@@ -101,9 +101,13 @@
 
   .tiles {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 14px;
     margin-bottom: 20px;
+  }
+
+  @media (max-width: 1100px) {
+    .tiles { grid-template-columns: repeat(3, 1fr); }
   }
 
   @media (max-width: 640px) {
@@ -122,7 +126,9 @@
   }
 
   .tile-ok  { border-left-color: var(--status-ok); }
+  .tile-warn { border-left-color: var(--status-new); }
   .tile-bad { border-left-color: var(--status-active); }
+  .tile-neutral { border-left-color: var(--status-unknown); }
 
   .tile-label {
     font-family: 'JetBrains Mono', monospace;
@@ -140,7 +146,9 @@
   }
 
   .tile-ok .tile-value  { color: var(--status-ok); }
+  .tile-warn .tile-value { color: var(--status-new); }
   .tile-bad .tile-value { color: var(--status-active); }
+  .tile-neutral .tile-value { color: var(--muted); }
 
   .tile-dot {
     width: 9px;
@@ -149,6 +157,8 @@
   }
 
   .tile-ok .tile-dot  { background: var(--status-ok); }
+  .tile-warn .tile-dot { background: var(--status-new); }
+  .tile-neutral .tile-dot { background: var(--status-unknown); }
   .tile-bad .tile-dot {
     background: var(--status-active);
     animation: blink-dot 1s infinite;
@@ -390,6 +400,14 @@
         <div>
           <div class="tile-label">Updates verfügbar</div>
           <div class="tile-value">{{ version_outdated_count }}</div>
+        </div>
+        <span class="tile-dot"></span>
+      </div>
+      <div class="tile {{ wlan_score.css }}"
+           title="{{ 'Sensor wlan_score, Stand ' ~ wlan_score.since if wlan_score.since else 'Sensor wlan_score nicht verfügbar' }}">
+        <div>
+          <div class="tile-label">WLAN Sicherheit</div>
+          <div class="tile-value">{{ wlan_score.value if wlan_score.value is not none else '–' }}</div>
         </div>
         <span class="tile-dot"></span>
       </div>

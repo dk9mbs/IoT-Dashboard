@@ -10,6 +10,7 @@ Auth:     Header apikey oder restapi_username / restapi_password
 """
 
 from typing import List, Optional
+from xml.sax.saxutils import quoteattr
 
 import requests
 
@@ -34,6 +35,18 @@ class IotSensorClient:
                  apikey: Optional[str] = None, base_url: Optional[str] = None):
         self.api_url = f"{base_url.rstrip('/')}/data" if base_url else self.API_URL
         self._headers = rest_headers(username, password, apikey)
+
+    def fetch_sensor(self, sensor_id: str) -> Optional[dict]:
+        """Fragt einen einzelnen Sensor ab; None, wenn es ihn nicht gibt."""
+        xml = (
+            '<restapi type="select"><table name="iot_sensor" alias="a"/>'
+            f'<filter type="and"><condition field="id" value={quoteattr(sensor_id)} operator="eq" />'
+            "</filter></restapi>"
+        )
+        response = requests.post(self.api_url, headers=self._headers, data=xml.encode("utf-8"))
+        response.raise_for_status()
+        rows = response.json()
+        return rows[0] if rows else None
 
     def fetch_notify_sensors(self) -> List[dict]:
         """Fragt Sensoren mit notify=-1 ab, ohne last_value_on-Filter."""
