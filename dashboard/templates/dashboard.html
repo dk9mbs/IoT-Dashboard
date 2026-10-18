@@ -428,12 +428,12 @@
     </details>
 
     <details class="section" id="section-sensors-stale">
-      <summary class="section-title">iot_sensor &middot; notify=-1 &amp; last_value_on &ge; 15 min</summary>
+      <summary class="section-title">iot_sensor &middot; notify=-1 &amp; letzte Meldung &gt; Watchdog</summary>
       <div class="panel">
         {% if sensor_error %}
           <div class="error">{{ sensor_error }}</div>
         {% elif sensor_rows|length == 0 %}
-          <div class="empty">Keine Sensoren gefunden, die länger als 15 Minuten keinen Wert gemeldet haben.</div>
+          <div class="empty">Keine Sensoren gefunden, die länger als ihr Watchdog keinen Wert gemeldet haben.</div>
         {% else %}
           <div class="table-scroll">
           <table>

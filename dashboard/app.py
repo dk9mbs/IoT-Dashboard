@@ -28,7 +28,7 @@ from dk9mbs_iot.rows import (
     extract_fields,
     extract_out_of_range_sensor,
     extract_row,
-    extract_sensor_row,
+    extract_stale_sensor,
 )
 from shelly_update import trigger_shelly_update
 
@@ -137,30 +137,27 @@ def dashboard():
     except requests.exceptions.RequestException as exc:
         error = f"Fehler bei der Abfrage des REST-Service: {exc}"
 
-    try:
-        sensor_client = IotSensorClient()
-        sensors = sensor_client.fetch_sensors()
-        sensor_rows = [extract_sensor_row(sensor) for sensor in sensors]
-    except RuntimeError as exc:
-        sensor_error = str(exc)
-    except requests.exceptions.RequestException as exc:
-        sensor_error = f"Fehler bei der Abfrage des REST-Service: {exc}"
-
     minmax_error = None
     minmax_rows = []
 
+    # Eine Abfrage fuer beide Auswertungen: "still" (Watchdog je Sensor) und
+    # "ausserhalb Min/Max" vergleichen Felder derselben Zeile, das geht nur hier.
     try:
-        minmax_sensor_client = IotSensorClient()
-        notify_sensors = minmax_sensor_client.fetch_notify_sensors()
+        notify_sensors = IotSensorClient().fetch_notify_sensors()
+        sensor_rows = [
+            row
+            for sensor in notify_sensors
+            if (row := extract_stale_sensor(sensor)) is not None
+        ]
         minmax_rows = [
             row
             for sensor in notify_sensors
             if (row := extract_out_of_range_sensor(sensor)) is not None
         ]
     except RuntimeError as exc:
-        minmax_error = str(exc)
+        sensor_error = minmax_error = str(exc)
     except requests.exceptions.RequestException as exc:
-        minmax_error = f"Fehler bei der Abfrage des REST-Service: {exc}"
+        sensor_error = minmax_error = f"Fehler bei der Abfrage des REST-Service: {exc}"
 
     try:
         version_client = IotDeviceClient()

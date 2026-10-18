@@ -5,7 +5,12 @@ Zeilen. Gemeinsam genutzt vom Dashboard (Anzeige) und vom Notify-Agenten
 "still" und "ausserhalb Min/Max" anwenden.
 """
 
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+# Zeitzone der Zeitstempel im REST-Service (last_value_on, last_scan_on)
+SERVER_TZ = ZoneInfo("Europe/Berlin")
 
 # Spalten, die im Dashboard angezeigt werden sollen.
 # Jeder Eintrag: (Feldname in der API-Antwort, Spaltentitel)
@@ -25,6 +30,7 @@ SENSOR_COLUMNS = [
     ("last_value", "Letzter Wert"),
     ("unit", "Einheit"),
     ("last_value_on", "Letzte Meldung"),
+    ("watchdog_warning_sec", "Watchdog (Sek.)"),
 ]
 
 SENSOR_MINMAX_COLUMNS = [
@@ -96,6 +102,43 @@ def extract_row(device: dict) -> dict:
 def extract_sensor_row(sensor: dict) -> dict:
     """Holt die iot_sensor-Spalten für die Anzeige."""
     return extract_fields(sensor, SENSOR_COLUMNS)
+
+
+def _raw(record: dict, field: str):
+    """Rohwert eines Feldes (die API liefert ihn direkt oder als {"value": ...})."""
+    value = record.get(field)
+    if isinstance(value, dict):
+        value = value.get("value", value.get("formatted_value"))
+    return value
+
+
+def extract_stale_sensor(sensor: dict, now: Optional[datetime] = None) -> Optional[dict]:
+    """
+    Liefert die Sensor-Zeile zurück, wenn der Sensor "still" ist: seine letzte
+    Meldung (last_value_on) liegt länger zurück als sein eigener Watchdog
+    (watchdog_warning_sec). Das lässt sich im FetchXML nicht formulieren, weil
+    zwei Felder derselben Zeile verglichen werden.
+    Keine Warnung (None), wenn der Sensor keinen Watchdog hat (leer oder 0)
+    oder noch nie einen Wert gemeldet hat.
+    """
+    try:
+        watchdog = int(_raw(sensor, "watchdog_warning_sec"))
+        last = datetime.fromisoformat(str(_raw(sensor, "last_value_on")))
+    except (TypeError, ValueError):
+        return None
+    if watchdog <= 0:
+        return None
+
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=SERVER_TZ)
+    now = now or datetime.now(SERVER_TZ)
+    silent = (now - last).total_seconds()
+    if silent <= watchdog:
+        return None
+
+    row = extract_sensor_row(sensor)
+    row["_silent_seconds"] = int(silent)
+    return row
 
 
 def extract_out_of_range_sensor(sensor: dict) -> Optional[dict]:

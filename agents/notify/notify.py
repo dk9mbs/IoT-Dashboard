@@ -8,7 +8,7 @@ Gemeldet wird jedes Ereignis genau einmal beim Auftreten und einmal bei
 der Erholung:
   - Geraet neu (status 'new')
   - Geraet offline (notify=-1 & last_scan_on > 10 Min., serverseitig gefiltert)
-  - Sensor still (notify=-1 & last_value_on > 15 Min., serverseitig gefiltert)
+  - Sensor still (notify=-1 & letzte Meldung aelter als watchdog_warning_sec des Sensors)
   - Sensorwert ausserhalb [min_value, max_value]
 
 REST-Zugang (IOT_REST_*) und Einstellungen (IOT_AGENT_SETTINGS) gibt der
@@ -33,7 +33,7 @@ import requests
 from dk9mbs_iot.agent import rest_from_env, settings_from_env
 from dk9mbs_iot.query.device import IotDeviceClient
 from dk9mbs_iot.query.sensor import IotSensorClient
-from dk9mbs_iot.rows import extract_out_of_range_sensor, extract_row, extract_sensor_row
+from dk9mbs_iot.rows import extract_out_of_range_sensor, extract_row, extract_stale_sensor
 
 from nextcloud_talk_notify import send_nextcloud_talk_message
 from telegram_notify import send_telegram_message
@@ -215,12 +215,23 @@ def check(notifier: Notifier) -> None:
             ),
         )
 
+    # Eine Abfrage fuer "still" (Watchdog je Sensor) und "ausserhalb Min/Max"
     try:
-        stale_rows = {row["id"]: row for row in map(extract_sensor_row, IotSensorClient(**clients).fetch_sensors())}
+        notify_sensors = IotSensorClient(**clients).fetch_notify_sensors()
+        stale_rows = {
+            row["id"]: row
+            for sensor in notify_sensors
+            if (row := extract_stale_sensor(sensor)) is not None
+        }
+        minmax_rows = {
+            row["id"]: row
+            for sensor in notify_sensors
+            if (row := extract_out_of_range_sensor(sensor)) is not None
+        }
     except (RuntimeError, requests.exceptions.RequestException) as exc:
         print(f"[notify] Sensor-Abfrage fehlgeschlagen: {exc}")
         notifier.failed = True
-        stale_rows = None
+        stale_rows = minmax_rows = None
 
     if stale_rows is not None:
         state["sensors"] = notifier.state_changes(
@@ -236,17 +247,6 @@ def check(notifier: Notifier) -> None:
                 f"✅ Sensor meldet wieder Werte: {label} (ID {sensor_id})"
             ),
         )
-
-    try:
-        minmax_rows = {
-            row["id"]: row
-            for sensor in IotSensorClient(**clients).fetch_notify_sensors()
-            if (row := extract_out_of_range_sensor(sensor)) is not None
-        }
-    except (RuntimeError, requests.exceptions.RequestException) as exc:
-        print(f"[notify] Sensor-Abfrage (Min/Max) fehlgeschlagen: {exc}")
-        notifier.failed = True
-        minmax_rows = None
 
     if minmax_rows is not None:
         state["minmax_sensors"] = notifier.state_changes(
