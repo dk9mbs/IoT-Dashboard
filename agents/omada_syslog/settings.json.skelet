@@ -1,7 +1,6 @@
 {
   "log_dir": ".",
   "window_minutes": 60,
-  "known_macs_file": "known_macs.json",
 
   "aps": [
     { "name": "", "ip": "", "mac": "" }

@@ -21,6 +21,7 @@ session-notes.md
 # Omada-Syslog-Agent: Betriebskonfiguration mit Netzwerk-/MAC-Daten,
 # nicht die .skelet-Vorlagen
 agents/omada_syslog/config.json
+# nicht mehr benutzt (bekannte MACs kommen aus iot_device.mac), kann geloescht werden
 agents/omada_syslog/known_macs.json
 
 # nmap-Scan: Einstellungen mit REST-Zugangsdaten, nicht die .skelet-Vorlage

@@ -9,6 +9,7 @@ Auth:     Header apikey oder restapi_username / restapi_password
 """
 
 from typing import List, Optional
+from xml.sax.saxutils import quoteattr
 
 import requests
 
@@ -64,6 +65,16 @@ class IotDeviceClient:
         response = requests.post(
             self.api_url, headers=self._headers, data=self.XML_PAYLOAD_ALL_SHELLY
         )
+        response.raise_for_status()
+        return response.json()
+
+    def fetch_all_devices(self, status_id: Optional[str] = None) -> List[dict]:
+        """Fragt alle Geräte ab, unabhängig vom Hersteller (z.B. für die MAC-Adressen),
+        optional nur mit diesem status_id (z.B. 'active')."""
+        condition = (f'<filter type="and"><condition field="status_id" value={quoteattr(status_id)} '
+                     f'operator="eq" /></filter>' if status_id else "")
+        xml = f'<restapi type="select"><table name="iot_device" alias="a"/>{condition}</restapi>'
+        response = requests.post(self.api_url, headers=self._headers, data=xml)
         response.raise_for_status()
         return response.json()
 

@@ -4,7 +4,7 @@ wlan_score.py - Ermittelt einen WLAN-Sicherheitsscore (0-100) aus den
 Syslog-Dateien der Omada-Access-Points (eine Datei pro AP: <ip>.log).
 
 Aufruf:
-    python3 wlan_score.py [--config settings.json] [--pretty] [--learn] [--push]
+    python3 wlan_score.py [--config settings.json] [--pretty] [--push]
 
 Die Einstellungen (APs, Muster, Bewertung ...) kommen zentral aus
 iot_agent_config.settings und werden vom Runner als IOT_AGENT_SETTINGS
@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from dk9mbs_iot.agent import rest_from_env, settings_from_env  # vom Agenten-Runner
+from dk9mbs_iot.query.device import IotDeviceClient
 
 AGENT_DIR = Path(__file__).resolve().parent
 
@@ -119,36 +120,31 @@ def is_internet(ip: str) -> bool:
         return False
 
 
-def get_known_macs(cfg: dict) -> dict:
-    """Bekannte Geraete als {mac: eintrag}. Optional pro Geraet "internet": false.
-    Spaeter hier durch Abruf vom REST-Server ersetzen."""
-    path = Path(cfg["known_macs_file"])
-    if not path.exists():  # Ersteinrichtung: --learn legt die Datei an
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        data = data.get("devices", [])
+# Nur Geraete mit diesem Status zaehlen als bekannt (iot_device_status.id)
+KNOWN_DEVICE_STATUS = "active"
+
+
+def get_known_macs(rest: dict) -> dict:
+    """
+    Bekannte Geraete als {mac: eintrag}, aus iot_device.mac - nur Geraete mit
+    status_id 'active'; MACs von Geraeten mit anderem Status (new, disabled ...)
+    gelten als unbekannt.
+    "internet" ist derzeit immer True; steht es bei einem Eintrag auf False,
+    zaehlt Internet-Verkehr dieses Geraets als "unexpected_internet".
+    """
+    devices = IotDeviceClient(apikey=rest["apikey"], base_url=rest["base_url"]).fetch_all_devices(
+        status_id=KNOWN_DEVICE_STATUS)
+    if devices and not any("mac" in d for d in devices):
+        # sonst gaelten alle Clients als unbekannt und der Score waere verfaelscht
+        raise RuntimeError("iot_device hat keine Spalte mac - Plugin IoTSensorNet aktualisieren")
     macs = {}
-    for item in data:
-        entry = item if isinstance(item, dict) else {"mac": item}
-        if entry.get("mac"):
-            macs[normalize_mac(entry["mac"])] = entry
+    for device in devices:
+        if device.get("mac"):
+            macs[normalize_mac(device["mac"])] = {
+                "mac": device["mac"], "id": device.get("id"), "name": device.get("name"),
+                "internet": True,
+            }
     return macs
-
-
-def learn_unknown(cfg: dict, unknown: dict) -> int:
-    """Haengt unbekannte MACs mit leerem Namen an die known_macs-Datei an."""
-    path = Path(cfg["known_macs_file"])
-    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-    devices = data.get("devices", []) if isinstance(data, dict) else data
-    for mac, aps in sorted(unknown.items()):
-        devices.append({"mac": mac, "name": "", "ap": ", ".join(aps), "internet": True})
-    if isinstance(data, dict):
-        data["devices"] = devices
-    else:
-        data = devices
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return len(unknown)
 
 
 def push_metrics(cfg: dict, metrics: dict, rest: dict) -> list:
@@ -184,7 +180,7 @@ def capped(value: int, cap) -> int:
 # Score-Berechnung
 # --------------------------------------------------------------------------
 
-def compute_score(cfg: dict) -> dict:
+def compute_score(cfg: dict, rest: dict) -> dict:
     now = datetime.now().astimezone()
     window = cfg.get("window_minutes", 60)
     since = now - timedelta(minutes=window)
@@ -192,7 +188,7 @@ def compute_score(cfg: dict) -> dict:
     sc = cfg["scoring"]
     pat = {k: re.compile(v, re.IGNORECASE) for k, v in cfg["patterns"].items()}
 
-    known = get_known_macs(cfg)
+    known = get_known_macs(rest)
     ignore = {normalize_mac(m) for m in cfg.get("ignore_macs", [])}
 
     auth_fail_macs = Counter()
@@ -348,8 +344,6 @@ def main():
     ap.add_argument("--config", default=None,
                     help="Einstellungen aus dieser JSON-Datei statt vom Runner (IOT_AGENT_SETTINGS)")
     ap.add_argument("--pretty", action="store_true", help="JSON eingerueckt ausgeben")
-    ap.add_argument("--learn", action="store_true",
-                    help="unbekannte MACs in die known_macs-Datei uebernehmen")
     ap.add_argument("--push", action="store_true",
                     help="Kennzahlen per REST nach iot_sensor_data schreiben")
     args = ap.parse_args()
@@ -367,15 +361,12 @@ def main():
                 raise RuntimeError("keine Einstellungen - ueber run_agents.py starten oder --config angeben")
             base_dir = AGENT_DIR
         # relative Pfade beziehen sich auf den Ordner der Config bzw. des Agenten
-        for key in ("log_dir", "known_macs_file"):
-            if not Path(cfg[key]).is_absolute():
-                cfg[key] = str(base_dir / cfg[key])
-        result = compute_score(cfg)
-        if args.learn:
-            n = learn_unknown(cfg, result["details"]["unknown_macs"])
-            print(f"{n} MAC(s) in {cfg['known_macs_file']} uebernommen", file=sys.stderr)
+        if not Path(cfg["log_dir"]).is_absolute():
+            cfg["log_dir"] = str(base_dir / cfg["log_dir"])
+        # REST-Zugang vom Runner: bekannte MACs aus iot_device und ggf. --push
+        rest = rest_from_env()
+        result = compute_score(cfg, rest)
         if args.push:
-            rest = rest_from_env()
             push_errors = push_metrics(cfg, result["metrics"], rest)
             ok = len(result["metrics"]) - len(push_errors)
             print(f"{ok}/{len(result['metrics'])} Kennzahl(en) an {rest['base_url']} gesendet",

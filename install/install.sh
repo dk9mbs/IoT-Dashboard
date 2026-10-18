@@ -131,7 +131,7 @@ for svc in "${SERVICES[@]}"; do
       mkdir -p "$ROOT_DIR/agents/logs"
       chown -R "$RUN_USER:" "$ROOT_DIR/agents/logs"
       for f in "$ROOT_DIR"/agents/agents.json "$ROOT_DIR"/agents/*/config.env "$ROOT_DIR"/agents/*/config.json \
-               "$ROOT_DIR"/agents/*/known_macs.json "$ROOT_DIR"/agents/*/vendor_cache.json \
+               "$ROOT_DIR"/agents/*/vendor_cache.json \
                "$ROOT_DIR"/agents/*/device_status_state.json; do
         [ -e "$f" ] && chown "$RUN_USER:" "$f"
       done
