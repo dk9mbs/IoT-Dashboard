@@ -154,8 +154,9 @@ def check(notifier: Notifier) -> None:
     """
     Prueft Geraete und Sensoren und meldet jede Aenderung genau einmal.
 
-    fetch_devices() liefert Geraete, bei denen last_scan_on aelter als 10 Min.
-    ist UND notify=-1 gesetzt ist, ODER der Status 'new' ist (dieselbe
+    fetch_devices() liefert Shellys, bei denen last_scan_on aelter als 10 Min.
+    ist UND notify=-1 gesetzt ist, ODER Geraete jedes Herstellers mit Status
+    'new' (dieselbe
     server-seitig gefilterte Logik wie fuer die Tabelle "auffaellige
     Geraete" im Dashboard). Die 'new'-Faelle werden separat als "neues
     Geraet" gemeldet, der Rest als "offline" - status_id wird vom Backend

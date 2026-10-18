@@ -17,9 +17,10 @@ Nutzung:
     REST-Zugang (IOT_REST_*) und Einstellungen (IOT_AGENT_SETTINGS, z.B.
     {"netz": "192.168.2.0/24", "args": "-sn"}) gibt der Agenten-Runner mit;
     mit --netz / --args / --rest-url /
-    --apikey lässt sich das überschreiben. Nur Hosts, deren Hostname mit
-    "shelly" beginnt, werden angelegt bzw. per PUT an "<rest-url>/<hostname>"
-    gesendet.
+    --apikey lässt sich das überschreiben. Jedes gefundene Gerät wird in
+    iot_device angelegt bzw. aktualisiert (ID: Hostname, sonst MAC). Shellys
+    (Hostname beginnt mit "shelly") bekommen den Hersteller shelly und zusätzlich
+    WLAN-/Firmware-Daten vom Gerät, alle anderen den Hersteller dk9mbs.
 """
 
 import argparse
@@ -28,6 +29,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 from xml.sax.saxutils import quoteattr
 from zoneinfo import ZoneInfo
 
@@ -273,26 +275,43 @@ def hersteller_von_macvendors(mac: str, timeout: int = 5, max_versuche: int = 3)
     return None
 
 
-def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None, version_available: str = None) -> dict:
+# Hersteller (iot_device_vendor.id) fuer Geraete, die keine Shellys sind
+HERSTELLER_SONSTIGE = "dk9mbs"
+
+
+def ist_shelly(daten: dict) -> bool:
+    return (daten.get("hostname") or "").lower().startswith("shelly")
+
+
+def geraete_id(daten: dict):
+    """ID in iot_device: Hostname, ohne Hostname die MAC-Adresse (None, wenn beides fehlt)."""
+    return daten.get("hostname") or daten.get("mac")
+
+
+def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None,
+                          version_available: str = None, shelly: bool = True) -> dict:
     """
     Erstellt das JSON-Payload für den PUT-Aufruf (Aktualisierung) aus den vollständigen
-    Host-Daten. Enthält: id (Hostname), address (IP-Adresse), last_scan_on
+    Host-Daten. Enthält: id (Hostname, sonst MAC), address (IP-Adresse), last_scan_on
     (aktueller Zeitstempel, mitteleuropäische Zeit), product_id (Hersteller laut
-    api.macvendors.com), network_ssid, network_rssi (direkt vom Gerät abgefragt),
-    version (aktuell installierte Firmware-Version), version_available
-    (verfügbare neuere Firmware-Version, falls vorhanden) sowie mac, wenn nmap
-    die MAC-Adresse ermitteln konnte.
+    api.macvendors.com) und mac, wenn nmap die MAC-Adresse ermitteln konnte.
+    Nur bei Shellys zusätzlich network_ssid, network_rssi (direkt vom Gerät abgefragt),
+    version (aktuell installierte Firmware-Version) und version_available
+    (verfügbare neuere Firmware-Version, falls vorhanden).
     """
-    wlan = wlan or {}
     payload = {
-        "id": daten.get("hostname"),
+        "id": geraete_id(daten),
         "address": daten.get("ip"),
         "last_scan_on": datetime.now(MITTELEUROPA).strftime("%Y-%m-%d %H:%M:%S"),
-        "network_ssid": wlan.get("ssid"),
-        "network_rssi": wlan.get("rssi") if wlan.get("rssi") is not None else 0,
-        "version": firmware_version,
-        "version_available": version_available,
     }
+    if shelly:
+        wlan = wlan or {}
+        payload.update({
+            "network_ssid": wlan.get("ssid"),
+            "network_rssi": wlan.get("rssi") if wlan.get("rssi") is not None else 0,
+            "version": firmware_version,
+            "version_available": version_available,
+        })
     # ohne ermittelten Hersteller den gespeicherten Wert nicht mit null ueberschreiben
     if product_id:
         payload["product_id"] = product_id
@@ -303,16 +322,15 @@ def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None
     return payload
 
 
-def erstelle_neuanlage_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None, version_available: str = None) -> dict:
+def erstelle_neuanlage_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None,
+                               version_available: str = None, shelly: bool = True) -> dict:
     """
-    Erstellt das JSON-Payload für den POST-Aufruf (Neuanlage) aus den vollständigen
-    Host-Daten. Enthält zusätzlich zu id, address, last_scan_on, product_id,
-    network_ssid, network_rssi, version und version_available die Felder
-    name (Hostname) und vendor_id.
+    Erstellt das JSON-Payload für den POST-Aufruf (Neuanlage): wie beim PUT, dazu
+    name (Hostname, sonst MAC) und vendor_id ('shelly' bzw. HERSTELLER_SONSTIGE).
     """
-    payload = erstelle_rest_payload(daten, product_id, wlan, firmware_version, version_available)
-    payload["name"] = daten.get("hostname")
-    payload["vendor_id"] = "shelly"
+    payload = erstelle_rest_payload(daten, product_id, wlan, firmware_version, version_available, shelly)
+    payload["name"] = geraete_id(daten)
+    payload["vendor_id"] = "shelly" if shelly else HERSTELLER_SONSTIGE
     return payload
 
 
@@ -320,18 +338,19 @@ def _rest_header(apikey: str) -> dict:
     return {"apikey": apikey or ""}
 
 
-def datensatz_existiert(rest_url: str, hostname: str, apikey: str, timeout: int = 5):
+def finde_datensatz(rest_url: str, feld: str, wert: str, apikey: str, timeout: int = 5):
     """
-    Prüft per XML-SELECT an '<.../data>', ob für den Hostname bereits ein Datensatz
-    in der Tabelle (letzter Teil von rest_url, z.B. iot_device) existiert.
-    Ein GET auf '<rest_url>/<hostname>' braucht beim REST-Service zusätzlich
-    Leserechte auf api_http_header, die der API-Key-Benutzer nicht hat.
-    Gibt True/False zurück, oder None, wenn die Prüfung fehlschlug.
+    Sucht per XML-SELECT an '<.../data>' in der Tabelle (letzter Teil von rest_url,
+    z.B. iot_device) einen Datensatz mit feld = wert.
+    Ein GET auf '<rest_url>/<id>' braucht beim REST-Service zusätzlich Leserechte
+    auf api_http_header, die der API-Key-Benutzer nicht hat.
+    Gibt die ID des Datensatzes zurück, "" wenn es keinen gibt, oder None, wenn
+    die Suche fehlschlug.
     """
     data_url, _, tabelle = rest_url.rstrip("/").rpartition("/")
     xml = (
         f'<restapi type="select"><table name={quoteattr(tabelle)} alias="a"/>'
-        f'<filter type="and"><condition field="id" value={quoteattr(hostname)} operator="eq" />'
+        f'<filter type="and"><condition field={quoteattr(feld)} value={quoteattr(wert)} operator="eq" />'
         f"</filter></restapi>"
     )
     header = {**_rest_header(apikey), "Content-Type": "application/xml"}
@@ -339,34 +358,42 @@ def datensatz_existiert(rest_url: str, hostname: str, apikey: str, timeout: int 
     try:
         antwort = requests.post(data_url, data=xml.encode("utf-8"), headers=header, timeout=timeout)
         if not antwort.ok:
-            print(f"  -> Prüfung {tabelle}/{hostname} fehlgeschlagen (Status {antwort.status_code}): {antwort.text[:200]}")
+            print(f"  -> Suche {tabelle} {feld}={wert} fehlgeschlagen (Status {antwort.status_code}): {antwort.text[:200]}")
             return None
-        vorhanden = len(antwort.json()) > 0
-        print(f"  -> {tabelle}/{hostname}: {'Datensatz vorhanden' if vorhanden else 'Datensatz nicht vorhanden'}")
-        return vorhanden
-    except (requests.exceptions.RequestException, ValueError) as e:
-        print(f"  -> Fehler bei der Prüfung {tabelle}/{hostname}: {e}")
+        treffer = antwort.json()
+        return str(treffer[0]["id"]) if treffer else ""
+    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+        print(f"  -> Fehler bei der Suche {tabelle} {feld}={wert}: {e}")
         return None
+
+
+def datensatz_id(rest_url: str, daten: dict, apikey: str, timeout: int = 5):
+    """
+    ID des vorhandenen Datensatzes: zuerst über die MAC (so entsteht kein zweiter
+    Eintrag, wenn ein Gerät später einen Hostnamen bekommt), sonst über die ID.
+    "" = nicht vorhanden, None = Suche fehlgeschlagen.
+    """
+    if daten.get("mac"):
+        gefunden = finde_datensatz(rest_url, "mac", daten["mac"], apikey, timeout)
+        if gefunden is None or gefunden:
+            return gefunden
+    return finde_datensatz(rest_url, "id", geraete_id(daten), apikey, timeout)
 
 
 def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int = 5) -> None:
     """
-    Fragt zunächst bei api.macvendors.com den Hersteller zur MAC-Adresse des Hosts ab
-    (Feld product_id), direkt beim Shelly-Gerät die aktuellen WLAN-Daten (SSID, RSSI;
-    Felder network_ssid, network_rssi), die installierte Firmware-Version (Feld version)
-    sowie eine ggf. verfügbare neuere Firmware-Version (Feld version_available). Prüft
-    anschließend, ob der Datensatz bereits existiert:
-    - Existiert er NICHT: Neuanlage per POST an die Basis-URL (ohne Hostname am Ende,
-      ohne abschließenden '/'). Payload enthält zusätzlich name und vendor_id.
-    - Existiert er bereits: Aktualisierung per PUT an '<Basis-URL>/<Hostname>'.
-      Payload enthält: id, address, last_scan_on, product_id, network_ssid,
-      network_rssi, version, version_available und mac (nur wenn ermittelt).
-    - Schlägt die Prüfung fehl: nichts senden (sonst drohen doppelte Datensätze).
+    Trägt ein gefundenes Gerät in iot_device ein bzw. aktualisiert es.
+    Fragt bei api.macvendors.com den Hersteller zur MAC-Adresse ab (Feld product_id);
+    bei Shellys zusätzlich direkt beim Gerät die WLAN-Daten (SSID, RSSI), die
+    installierte Firmware-Version und eine ggf. verfügbare neuere Version. Danach:
+    - Datensatz vorhanden (gesucht über MAC, sonst ID): PUT an '<Basis-URL>/<ID>'.
+    - Nicht vorhanden: POST an die Basis-URL (ohne ID, ohne abschließenden '/'),
+      zusätzlich mit name und vendor_id ('shelly', sonst HERSTELLER_SONSTIGE).
+    - Suche fehlgeschlagen: nichts senden (sonst drohen doppelte Datensätze).
     Angemeldet wird mit dem Header 'apikey'.
     """
-    hostname = daten.get("hostname") or ""
+    shelly = ist_shelly(daten)
     basis_url = rest_url.rstrip('/')
-    ziel_url_put = f"{basis_url}/{hostname}"
 
     hersteller = hersteller_von_macvendors(daten.get("mac"))
     if hersteller:
@@ -375,43 +402,45 @@ def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int 
         hersteller = daten["vendor"]
         print(f"  -> Hersteller laut nmap: {hersteller}")
 
-    wlan = shelly_wlan_daten(daten.get("ip"))
-    if wlan.get("ssid"):
-        print(f"  -> WLAN laut Gerät: SSID={wlan['ssid']}, RSSI={wlan['rssi']}")
-    else:
-        print(f"  -> WLAN-Daten konnten nicht vom Gerät abgefragt werden")
+    wlan, firmware_version, version_available = {}, None, None
+    if shelly:
+        wlan = shelly_wlan_daten(daten.get("ip"))
+        if wlan.get("ssid"):
+            print(f"  -> WLAN laut Gerät: SSID={wlan['ssid']}, RSSI={wlan['rssi']}")
+        else:
+            print(f"  -> WLAN-Daten konnten nicht vom Gerät abgefragt werden")
 
-    firmware_version = shelly_firmware_version(daten.get("ip"))
-    if firmware_version:
-        print(f"  -> Firmware-Version laut Gerät: {firmware_version}")
-    else:
-        print(f"  -> Firmware-Version konnte nicht vom Gerät abgefragt werden")
+        firmware_version = shelly_firmware_version(daten.get("ip"))
+        if firmware_version:
+            print(f"  -> Firmware-Version laut Gerät: {firmware_version}")
+        else:
+            print(f"  -> Firmware-Version konnte nicht vom Gerät abgefragt werden")
 
-    version_available = shelly_update_verfuegbar(daten.get("ip"))
-    if version_available:
-        print(f"  -> Update verfügbar: {version_available}")
-    else:
-        print(f"  -> Kein Update verfügbar bzw. nicht ermittelbar")
-
-    payload_update = erstelle_rest_payload(daten, hersteller, wlan, firmware_version, version_available)
-    payload_neuanlage = erstelle_neuanlage_payload(daten, hersteller, wlan, firmware_version, version_available)
+        version_available = shelly_update_verfuegbar(daten.get("ip"))
+        if version_available:
+            print(f"  -> Update verfügbar: {version_available}")
+        else:
+            print(f"  -> Kein Update verfügbar bzw. nicht ermittelbar")
 
     header = _rest_header(apikey)
 
-    existiert_bereits = datensatz_existiert(rest_url, hostname, apikey, timeout)
-    if existiert_bereits is None:
-        print(f"  -> Übersprungen: {hostname} (Existenz-Prüfung fehlgeschlagen)")
+    vorhandene_id = datensatz_id(rest_url, daten, apikey, timeout)
+    if vorhandene_id is None:
+        print(f"  -> Übersprungen: {geraete_id(daten)} (Suche in iot_device fehlgeschlagen)")
         return
 
     try:
-        if existiert_bereits:
-            print(f"  -> Aktualisiere: {hostname}")
-            methode, ziel_url, payload = "PUT", ziel_url_put, payload_update
+        if vorhandene_id:
+            payload = erstelle_rest_payload(daten, hersteller, wlan, firmware_version, version_available, shelly)
+            payload["id"] = vorhandene_id
+            print(f"  -> Aktualisiere: {vorhandene_id}")
+            methode, ziel_url = "PUT", f"{basis_url}/{quote(vorhandene_id, safe='')}"
         else:
-            print(f"  -> Lege neu an: {hostname}")
-            # Beim Anlegen (POST) wird der Hostname NICHT an die URL angehängt
+            payload = erstelle_neuanlage_payload(daten, hersteller, wlan, firmware_version, version_available, shelly)
+            print(f"  -> Lege neu an: {payload['id']} (Hersteller {payload['vendor_id']})")
+            # Beim Anlegen (POST) wird die ID NICHT an die URL angehängt
             # und die Basis-URL darf nicht mit '/' enden.
-            methode, ziel_url, payload = "POST", basis_url, payload_neuanlage
+            methode, ziel_url = "POST", basis_url
         antwort = requests.request(methode, ziel_url, json=payload, headers=header, timeout=timeout)
 
         if antwort.ok:
@@ -473,10 +502,13 @@ def scan_netzwerk(netzwerk: str, scan_argumente: str = "-sn", rest_url: str = No
             for p in daten["ports"]:
                 print(f"  {p['port']}/{p['protokoll']}  {p['dienst']}")
 
-        # Host-Daten per PUT an den REST-Service senden, aber nur wenn der
-        # Hostname mit "shelly" beginnt (Groß-/Kleinschreibung wird ignoriert)
-        if rest_url and daten["hostname"] and daten["hostname"].lower().startswith("shelly"):
-            sende_an_rest_service(daten, rest_url, apikey)
+        # Jedes Gerät in iot_device eintragen bzw. aktualisieren - ID ist der
+        # Hostname, ohne Hostname die MAC; ohne beides lässt es sich nicht zuordnen
+        if rest_url:
+            if geraete_id(daten):
+                sende_an_rest_service(daten, rest_url, apikey)
+            else:
+                print("  -> Übersprungen: weder Hostname noch MAC-Adresse bekannt")
 
         print("-" * 40)
 
@@ -508,7 +540,7 @@ def main():
         dest="rest_url",
         default=None,
         help="URL der REST-Tabelle (Standard: $IOT_REST_BASE_URL/data/iot_device vom Runner); "
-             "passende Hosts (Hostname beginnt mit 'shelly') werden angelegt bzw. aktualisiert",
+             "alle gefundenen Geräte werden angelegt bzw. aktualisiert",
     )
     parser.add_argument(
         "--apikey",

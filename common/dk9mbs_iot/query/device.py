@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Fragt IoT-Geräte des Vendors 'shelly' ab, bei denen entweder der
-letzte Scan älter als 10 Minuten ist UND notify=-1 gesetzt ist,
-ODER der Status 'new' ist.
+Fragt auffällige IoT-Geräte ab:
+  - Shellys, deren letzter Scan älter als 10 Minuten ist UND notify=-1 gesetzt ist
+    ("offline"; nur Shellys, sonst würde z.B. jedes Handy außer Haus gemeldet),
+  - ODER Geräte jedes Herstellers mit Status 'new' (vom nmap-Agenten neu angelegt).
 
 Endpunkt: https://dk9mbs.de/api/v1.0/data
 Auth:     Header apikey oder restapi_username / restapi_password
@@ -24,15 +25,13 @@ class IotDeviceClient:
     XML_PAYLOAD = """<restapi type="select">
     <table name="iot_device" alias="a"/>
 
-    <filter type="and">
-        <condition field="vendor_id" value="shelly" operator="eq" />
-        <filter type="or">
-            <filter type="and">
-                <condition field="last_scan_on" value="10" operator="olderThenXMinutes" />
-                <condition field="notify" value="-1" operator="eq" />
-            </filter>
-            <condition field="status_id" value="new" operator="eq" />
+    <filter type="or">
+        <filter type="and">
+            <condition field="vendor_id" value="shelly" operator="eq" />
+            <condition field="last_scan_on" value="10" operator="olderThenXMinutes" />
+            <condition field="notify" value="-1" operator="eq" />
         </filter>
+        <condition field="status_id" value="new" operator="eq" />
     </filter>
 </restapi>"""
 
