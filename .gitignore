@@ -42,3 +42,6 @@ agents/logs/
 
 # nmap-Scan: Cache der Hersteller pro MAC-Prefix (wird automatisch angelegt)
 agents/nmap/vendor_cache.json
+
+# Shelly-Agent: Zeitpunkt der letzten Update-Pruefung je Geraet (wird automatisch angelegt)
+agents/shelly/update_check_state.json

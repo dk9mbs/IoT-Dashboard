@@ -19,10 +19,10 @@ Nutzung:
     mit --netz / --args / --rest-url /
     --apikey lässt sich das überschreiben. Jedes gefundene Gerät wird in
     iot_device angelegt bzw. aktualisiert (ID: MAC-Adresse, Hostname in host_name).
-    Shellys (Hostname beginnt mit "shelly") behalten den Hostnamen als ID, bekommen
-    den Hersteller shelly und zusätzlich WLAN-/Firmware-Daten vom Gerät, alle
-    anderen den Hersteller dk9mbs. Den Namen (name) setzt nmap nur bei der
-    Neuanlage, danach wird er manuell gepflegt.
+    Shellys (Hostname beginnt mit "shelly") behalten den Hostnamen als ID und
+    bekommen den Hersteller shelly, alle anderen den Hersteller dk9mbs. WLAN-,
+    Firmware- und Update-Daten der Shellys holt der Agent agents/shelly. Den
+    Namen (name) setzt nmap nur bei der Neuanlage, danach wird er manuell gepflegt.
 """
 
 import argparse
@@ -120,102 +120,6 @@ def _speichere_vendor_cache() -> None:
         print(f"  -> Warnung: Hersteller-Cache konnte nicht gespeichert werden: {e}")
 
 
-def shelly_update_verfuegbar(ip: str, timeout: int = 3) -> str:
-    """
-    Prüft direkt beim Shelly-Gerät, ob eine neuere Firmware-Version verfügbar ist.
-    Versucht zuerst die Gen2+ RPC-API (/rpc/Shelly.CheckForUpdate, aktive Prüfung),
-    fällt bei Fehlschlag auf die ältere Gen1-API (/status, Feld 'update.new_version') zurück.
-    Gibt die verfügbare Versions-Nummer zurück, oder None falls kein Update verfügbar
-    bzw. nicht ermittelbar.
-    """
-    # Gen2+ Geräte: RPC-Endpunkt prüft aktiv beim Update-Server
-    try:
-        antwort = requests.get(f"http://{ip}/rpc/Shelly.CheckForUpdate", timeout=timeout)
-        if antwort.ok:
-            daten = antwort.json()
-            return daten.get("stable", {}).get("version") or None
-    except (requests.exceptions.RequestException, ValueError):
-        pass
-
-    # Gen1 Geräte: /status enthält bereits das Ergebnis der letzten automatischen Prüfung
-    try:
-        antwort = requests.get(f"http://{ip}/status", timeout=timeout)
-        if antwort.ok:
-            daten = antwort.json()
-            return daten.get("update", {}).get("new_version") or None
-    except (requests.exceptions.RequestException, ValueError):
-        pass
-
-    return None
-
-
-def shelly_firmware_version(ip: str, timeout: int = 3) -> str:
-    """
-    Fragt direkt beim Shelly-Gerät (per HTTP) die aktuell installierte Firmware-Version ab.
-    Versucht zuerst die Gen2+ RPC-API (/rpc/Shelly.GetDeviceInfo, Feld 'ver'), fällt bei
-    Fehlschlag auf die ältere Gen1-API (/status, Feld 'update.old_version') zurück.
-    Gibt die Versions-String zurück, oder None falls nicht ermittelbar.
-    """
-    # Gen2+ Geräte: RPC-Endpunkt liefert kurze Versionsnummer, z.B. "0.6.7"
-    try:
-        antwort = requests.get(f"http://{ip}/rpc/Shelly.GetDeviceInfo", timeout=timeout)
-        if antwort.ok:
-            daten = antwort.json()
-            version = daten.get("ver")
-            if version:
-                return version
-    except (requests.exceptions.RequestException, ValueError):
-        pass
-
-    # Gen1 Geräte: /status enthält unter 'update' die aktuell installierte Version
-    try:
-        antwort = requests.get(f"http://{ip}/status", timeout=timeout)
-        if antwort.ok:
-            daten = antwort.json()
-            version = daten.get("update", {}).get("old_version")
-            if version:
-                return version
-    except (requests.exceptions.RequestException, ValueError):
-        pass
-
-    return None
-
-
-def shelly_wlan_daten(ip: str, timeout: int = 3) -> dict:
-    """
-    Fragt direkt beim Shelly-Gerät (per HTTP) die aktuellen WLAN-Daten ab.
-    Versucht zuerst die Gen2+ RPC-API (/rpc/WiFi.GetStatus), fällt bei Fehlschlag
-    auf die ältere Gen1-API (/status) zurück.
-    Gibt ein Dict {'ssid': ..., 'rssi': ...} zurück, Werte sind None falls nicht ermittelbar.
-    """
-    ergebnis = {"ssid": None, "rssi": None}
-
-    # Gen2+ Geräte: RPC-Endpunkt
-    try:
-        antwort = requests.get(f"http://{ip}/rpc/WiFi.GetStatus", timeout=timeout)
-        if antwort.ok:
-            daten = antwort.json()
-            ergebnis["ssid"] = daten.get("ssid")
-            ergebnis["rssi"] = daten.get("rssi")
-            if ergebnis["ssid"] is not None:
-                return ergebnis
-    except (requests.exceptions.RequestException, ValueError):
-        pass
-
-    # Gen1 Geräte: klassischer /status-Endpunkt mit verschachteltem wifi_sta-Objekt
-    try:
-        antwort = requests.get(f"http://{ip}/status", timeout=timeout)
-        if antwort.ok:
-            daten = antwort.json()
-            wifi_sta = daten.get("wifi_sta", {})
-            ergebnis["ssid"] = wifi_sta.get("ssid")
-            ergebnis["rssi"] = wifi_sta.get("rssi")
-    except (requests.exceptions.RequestException, ValueError):
-        pass
-
-    return ergebnis
-
-
 def hersteller_von_macvendors(mac: str, timeout: int = 5, max_versuche: int = 3) -> str:
     """
     Fragt bei api.macvendors.com den Hersteller zu einer MAC-Adresse ab.
@@ -295,31 +199,19 @@ def geraete_id(daten: dict):
     return daten.get("mac")
 
 
-def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None,
-                          version_available: str = None, shelly: bool = True) -> dict:
+def erstelle_rest_payload(daten: dict, product_id: str = None) -> dict:
     """
     Erstellt das JSON-Payload für den PUT-Aufruf (Aktualisierung) aus den vollständigen
     Host-Daten. Enthält: id (siehe geraete_id), address (IP-Adresse), last_scan_on
     (aktueller Zeitstempel, mitteleuropäische Zeit), product_id (Hersteller laut
     api.macvendors.com), mac und host_name, wenn nmap sie ermitteln konnte.
     name ist nicht enthalten - der wird manuell gepflegt.
-    Nur bei Shellys zusätzlich network_ssid, network_rssi (direkt vom Gerät abgefragt),
-    version (aktuell installierte Firmware-Version) und version_available
-    (verfügbare neuere Firmware-Version, falls vorhanden).
     """
     payload = {
         "id": geraete_id(daten),
         "address": daten.get("ip"),
         "last_scan_on": datetime.now(MITTELEUROPA).strftime("%Y-%m-%d %H:%M:%S"),
     }
-    if shelly:
-        wlan = wlan or {}
-        payload.update({
-            "network_ssid": wlan.get("ssid"),
-            "network_rssi": wlan.get("rssi") if wlan.get("rssi") is not None else 0,
-            "version": firmware_version,
-            "version_available": version_available,
-        })
     # ohne ermittelten Hersteller den gespeicherten Wert nicht mit null ueberschreiben
     if product_id:
         payload["product_id"] = product_id
@@ -333,16 +225,15 @@ def erstelle_rest_payload(daten: dict, product_id: str = None, wlan: dict = None
     return payload
 
 
-def erstelle_neuanlage_payload(daten: dict, product_id: str = None, wlan: dict = None, firmware_version: str = None,
-                               version_available: str = None, shelly: bool = True) -> dict:
+def erstelle_neuanlage_payload(daten: dict, product_id: str = None) -> dict:
     """
     Erstellt das JSON-Payload für den POST-Aufruf (Neuanlage): wie beim PUT, dazu
     name (Vorbelegung: Hostname, sonst ID) und vendor_id ('shelly' bzw.
     HERSTELLER_SONSTIGE).
     """
-    payload = erstelle_rest_payload(daten, product_id, wlan, firmware_version, version_available, shelly)
+    payload = erstelle_rest_payload(daten, product_id)
     payload["name"] = daten.get("hostname") or geraete_id(daten)
-    payload["vendor_id"] = "shelly" if shelly else HERSTELLER_SONSTIGE
+    payload["vendor_id"] = "shelly" if ist_shelly(daten) else HERSTELLER_SONSTIGE
     return payload
 
 
@@ -395,9 +286,8 @@ def datensatz_id(rest_url: str, daten: dict, apikey: str, timeout: int = 5):
 def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int = 5) -> None:
     """
     Trägt ein gefundenes Gerät in iot_device ein bzw. aktualisiert es.
-    Fragt bei api.macvendors.com den Hersteller zur MAC-Adresse ab (Feld product_id);
-    bei Shellys zusätzlich direkt beim Gerät die WLAN-Daten (SSID, RSSI), die
-    installierte Firmware-Version und eine ggf. verfügbare neuere Version. Danach:
+    Fragt bei api.macvendors.com den Hersteller zur MAC-Adresse ab (Feld product_id).
+    Danach:
     - Datensatz vorhanden (gesucht über MAC, sonst ID): PUT an '<Basis-URL>/<ID>'.
     - Nicht vorhanden: POST an die Basis-URL (ohne ID, ohne abschließenden '/'),
       zusätzlich mit name (Vorbelegung) und vendor_id ('shelly', sonst
@@ -405,7 +295,6 @@ def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int 
     - Suche fehlgeschlagen: nichts senden (sonst drohen doppelte Datensätze).
     Angemeldet wird mit dem Header 'apikey'.
     """
-    shelly = ist_shelly(daten)
     basis_url = rest_url.rstrip('/')
 
     hersteller = hersteller_von_macvendors(daten.get("mac"))
@@ -414,26 +303,6 @@ def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int 
     elif daten.get("vendor"):
         hersteller = daten["vendor"]
         print(f"  -> Hersteller laut nmap: {hersteller}")
-
-    wlan, firmware_version, version_available = {}, None, None
-    if shelly:
-        wlan = shelly_wlan_daten(daten.get("ip"))
-        if wlan.get("ssid"):
-            print(f"  -> WLAN laut Gerät: SSID={wlan['ssid']}, RSSI={wlan['rssi']}")
-        else:
-            print(f"  -> WLAN-Daten konnten nicht vom Gerät abgefragt werden")
-
-        firmware_version = shelly_firmware_version(daten.get("ip"))
-        if firmware_version:
-            print(f"  -> Firmware-Version laut Gerät: {firmware_version}")
-        else:
-            print(f"  -> Firmware-Version konnte nicht vom Gerät abgefragt werden")
-
-        version_available = shelly_update_verfuegbar(daten.get("ip"))
-        if version_available:
-            print(f"  -> Update verfügbar: {version_available}")
-        else:
-            print(f"  -> Kein Update verfügbar bzw. nicht ermittelbar")
 
     header = _rest_header(apikey)
 
@@ -444,12 +313,12 @@ def sende_an_rest_service(daten: dict, rest_url: str, apikey: str, timeout: int 
 
     try:
         if vorhandene_id:
-            payload = erstelle_rest_payload(daten, hersteller, wlan, firmware_version, version_available, shelly)
+            payload = erstelle_rest_payload(daten, hersteller)
             payload["id"] = vorhandene_id
             print(f"  -> Aktualisiere: {vorhandene_id}")
             methode, ziel_url = "PUT", f"{basis_url}/{quote(vorhandene_id, safe='')}"
         else:
-            payload = erstelle_neuanlage_payload(daten, hersteller, wlan, firmware_version, version_available, shelly)
+            payload = erstelle_neuanlage_payload(daten, hersteller)
             print(f"  -> Lege neu an: {payload['id']} (Hersteller {payload['vendor_id']})")
             # Beim Anlegen (POST) wird die ID NICHT an die URL angehängt
             # und die Basis-URL darf nicht mit '/' enden.

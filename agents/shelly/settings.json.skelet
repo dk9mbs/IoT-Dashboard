@@ -1,0 +1,6 @@
+{
+  "timeout": 3,
+  "retries": 3,
+  "parallel": 8,
+  "update_check_minutes": 60
+}
