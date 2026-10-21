@@ -40,8 +40,13 @@ API-Keys und MAC-Adressen prüfen.
 ## Fachliche Regeln
 
 - nmap trägt **alle** gefundenen Geräte in `iot_device` ein: Shellys mit
-  Hersteller `shelly`, alle anderen mit `dk9mbs`; ohne Hostname wird die MAC
-  zur ID. Bestehende Einträge zuerst über die MAC suchen.
+  Hersteller `shelly`, alle anderen mit `dk9mbs`. ID = MAC, nur Shellys
+  behalten den Hostnamen als ID; Geräte ohne bekannte MAC werden übersprungen.
+  Der Hostname steht in `host_name`; `name` wird nur bei Neuanlage gesetzt
+  (Hostname bzw. ID) und sonst manuell gepflegt. Bestehende Einträge zuerst
+  über die MAC suchen.
+- Shellys fragt der Agent `shelly` per HTTP ab (setzt ebenfalls
+  `last_scan_on`, dazu WLAN, Firmware, Update); nmap legt sie nur an.
 - `mac` nur senden, wenn bekannt – **immer ohne Fallback**.
 - Als bekannt (z. B. WLAN-Score) zählen nur Geräte mit Status `active`.
 - „Neu“ = Status `new` aller Hersteller; „Offline“ nur Shellys.
