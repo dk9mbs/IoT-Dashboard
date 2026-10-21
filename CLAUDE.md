@@ -65,4 +65,7 @@ API-Keys und MAC-Adressen prüfen.
 
 ## Sprache
 
-Kommunikation und Kommentare auf Deutsch, Commit-Messages auf Englisch.
+Kommunikation, Kommentare, Docstrings und Ausgaben auf Deutsch,
+Commit-Messages auf Englisch. Bezeichner im Code (Funktionen, Variablen,
+Konstanten, Klassen) auf Englisch – gilt für neuen Code; bestehende deutsche
+Namen nur umbenennen, wenn danach gefragt wird.

@@ -1,0 +1,6 @@
+{
+  "host": "",
+  "mounts": [],
+  "metrics": ["used_percent"],
+  "namespace": "disk"
+}
