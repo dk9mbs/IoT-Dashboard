@@ -46,7 +46,8 @@ API-Keys und MAC-Adressen prüfen.
   (Hostname bzw. ID) und sonst manuell gepflegt. Bestehende Einträge zuerst
   über die MAC suchen.
 - Shellys fragt der Agent `shelly` per HTTP ab (setzt ebenfalls
-  `last_scan_on`, dazu WLAN, Firmware, Update); nmap legt sie nur an.
+  `last_scan_on`, dazu WLAN, Firmware, Update; Ausgabetyp 4, schreibt also
+  über den Runner); nmap legt sie nur an.
 - `mac` nur senden, wenn bekannt – **immer ohne Fallback**.
 - Als bekannt (z. B. WLAN-Score) zählen nur Geräte mit Status `active`.
 - „Neu“ = Status `new` aller Hersteller; „Offline“ nur Shellys.
@@ -65,7 +66,8 @@ API-Keys und MAC-Adressen prüfen.
   nicht vollständig geschrieben, 127 Befehl nicht gefunden.
 - Agenten mit Ausgabetyp > 1 (`iot_agent.output_type_id`, siehe
   `agents/agent_output.py`) dürfen auf stdout **nur** das JSON
-  `{"data": [...]}` ausgeben – Log-Meldungen nach stderr.
+  `{"data": [...]}` ausgeben – Log-Meldungen nach stderr
+  (`dk9mbs_iot.agent.log` / `write_output`).
 
 ## Sprache
 

@@ -5,10 +5,27 @@ Umgebung eines Agenten. Der Agenten-Runner (agents/run_agents.py) setzt:
     IOT_AGENT_SETTINGS                                     Einstellungen (JSON)
 
 Die Einstellungen kommen zentral aus iot_agent_config.settings.
+
+Agenten mit Ausgabetyp > 1 (iot_agent.output_type_id) geben ihr Ergebnis mit
+write_output() als JSON auf stdout aus und melden alles andere mit log() auf
+stderr; der Runner schreibt die Daten dann per REST (agents/agent_output.py).
 """
 
 import json
 import os
+import sys
+
+
+def log(*args) -> None:
+    """Log-Meldung nach stderr (stdout ist dem JSON-Ergebnis vorbehalten)."""
+    print(*args, file=sys.stderr, flush=True)
+
+
+def write_output(items: list) -> None:
+    """Ergebnis für den Runner: {"data": [...]} als einzige Ausgabe auf stdout."""
+    json.dump({"data": items}, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def rest_from_env() -> dict:

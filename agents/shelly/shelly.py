@@ -17,9 +17,13 @@ danach werden nur die passenden Endpunkte abgefragt:
 Abgefragt werden alle Geräte mit vendor_id 'shelly' ausser Status 'disabled'.
 Neue Shellys legt weiterhin der nmap-Agent an (dort steht auch die Adresse).
 
+Ausgabetyp 4 (Update Device): das Ergebnis geht als JSON {"data": [...]} auf
+stdout, der Runner schreibt es nach iot_device; Log-Meldungen auf stderr.
+Gelesen wird weiterhin selbst (Shellys aus iot_device).
+
 Nutzung:
-    python3 shelly.py              REST-Zugang und Einstellungen vom Agenten-Runner
-    python3 shelly.py --no-rest    nur abfragen und ausgeben, nichts senden
+    python3 shelly.py                  REST-Zugang und Einstellungen vom Agenten-Runner
+    python3 shelly.py 2>/dev/null      nur das JSON-Ergebnis anzeigen
 
 Einstellungen (IOT_AGENT_SETTINGS, siehe settings.json.skelet):
     timeout               Sekunden je HTTP-Anfrage an ein Gerät (Standard 3)
@@ -36,12 +40,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import requests
 
-from dk9mbs_iot.agent import rest_from_env, settings_from_env  # vom Agenten-Runner
+from dk9mbs_iot.agent import log, rest_from_env, settings_from_env, write_output  # vom Agenten-Runner
 from dk9mbs_iot.query.device import IotDeviceClient
 
 MITTELEUROPA = ZoneInfo("Europe/Berlin")
@@ -140,14 +143,13 @@ def _speichere_update_state(state: dict) -> None:
     try:
         UPDATE_STATE_DATEI.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
     except OSError as e:
-        print(f"Warnung: {UPDATE_STATE_DATEI.name} konnte nicht gespeichert werden: {e}")
+        log(f"Warnung: {UPDATE_STATE_DATEI.name} konnte nicht gespeichert werden: {e}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fragt die Shellys aus iot_device per HTTP ab.")
-    parser.add_argument("--no-rest", action="store_true",
-                        help="nur abfragen und ausgeben, nichts an den REST-Service senden")
-    argumente = parser.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Fragt die Shellys aus iot_device per HTTP ab; Ergebnis als JSON auf stdout.")
+    parser.parse_args()
 
     settings = settings_from_env()
     timeout = float(settings.get("timeout", 3))
@@ -158,14 +160,14 @@ def main() -> int:
     try:
         rest = rest_from_env()
     except RuntimeError as e:
-        print(f"Fehler: {e}")
+        log(f"Fehler: {e}")
         return 1
     client = IotDeviceClient(apikey=rest["apikey"], base_url=rest["base_url"])
     try:
         geraete = [g for g in client.fetch_all_shelly_devices()
                    if _wert(g, "status_id") != STATUS_IGNORIERT and _wert(g, "address")]
     except requests.exceptions.RequestException as e:
-        print(f"Fehler: Shellys konnten nicht aus iot_device gelesen werden: {e}")
+        log(f"Fehler: Shellys konnten nicht aus iot_device gelesen werden: {e}")
         return 1
 
     update_state = _lade_update_state()
@@ -176,45 +178,31 @@ def main() -> int:
         update_pruefen = jetzt - update_state.get(geraete_id, 0) >= update_intervall
         return geraete_id, ip, frage_shelly_ab(ip, timeout, versuche, update_pruefen)
 
-    print(f"Frage {len(geraete)} Shelly(s) ab ({parallel} parallel, {versuche} Versuch(e), "
-          f"Timeout {timeout:g}s) ...")
+    log(f"Frage {len(geraete)} Shelly(s) ab ({parallel} parallel, {versuche} Versuch(e), "
+        f"Timeout {timeout:g}s) ...")
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         ergebnisse = sorted(pool.map(pruefe, geraete))
 
-    basis_url = f"{rest['base_url']}/data/iot_device"
-    header = {"apikey": rest["apikey"]}
-    erreichbar = fehler = 0
+    # Geschrieben wird vom Runner (Ausgabetyp "Update Device") - der Agent erfährt
+    # nicht, ob das gelingt; die Update-Prüfung gilt daher schon nach der Abfrage
+    # als erledigt.
+    output = []
     for geraete_id, ip, ergebnis in ergebnisse:
         if not ergebnis["erreichbar"]:
-            print(f"{geraete_id} ({ip}): nicht erreichbar")
+            log(f"{geraete_id} ({ip}): nicht erreichbar")
             continue
-        erreichbar += 1
         update = (f", Update: {ergebnis['version_available'] or 'keins'}"
                   if ergebnis["update_geprueft"] else "")
-        print(f"{geraete_id} ({ip}): Gen{ergebnis['gen']}, Firmware {ergebnis['version'] or '?'}, "
-              f"WLAN {ergebnis['ssid'] or '?'} ({ergebnis['rssi'] if ergebnis['rssi'] is not None else '?'}){update}")
-        if argumente.no_rest:
-            continue
-        try:
-            antwort = requests.put(f"{basis_url}/{quote(geraete_id, safe='')}",
-                                   json=erstelle_payload(geraete_id, ergebnis),
-                                   headers=header, timeout=rest["timeout"])
-            if not antwort.ok:
-                fehler += 1
-                print(f"  -> PUT fehlgeschlagen (Status {antwort.status_code}): {antwort.text[:200]}")
-                continue
-        except requests.exceptions.RequestException as e:
-            fehler += 1
-            print(f"  -> Fehler beim Senden: {e}")
-            continue
+        log(f"{geraete_id} ({ip}): Gen{ergebnis['gen']}, Firmware {ergebnis['version'] or '?'}, "
+            f"WLAN {ergebnis['ssid'] or '?'} ({ergebnis['rssi'] if ergebnis['rssi'] is not None else '?'}){update}")
+        output.append(erstelle_payload(geraete_id, ergebnis))
         if ergebnis["update_geprueft"]:
             update_state[geraete_id] = jetzt
 
-    if not argumente.no_rest:
-        _speichere_update_state(update_state)
-    print(f"\n{erreichbar}/{len(ergebnisse)} erreichbar"
-          + (f", {fehler} Fehler beim Senden" if fehler else ""))
-    return 1 if fehler else 0
+    _speichere_update_state(update_state)
+    log(f"\n{len(output)}/{len(ergebnisse)} erreichbar")
+    write_output(output)
+    return 0
 
 
 if __name__ == "__main__":
