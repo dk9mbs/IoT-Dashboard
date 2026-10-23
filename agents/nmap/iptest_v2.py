@@ -331,7 +331,8 @@ def main():
     netz = argumente.netz or settings.get("netz") or "192.168.1.0/24"
     scan_argumente = argumente.scan_argumente or settings.get("args") or "-sn"
 
-    write_output(scan_netzwerk(netz, scan_argumente))
+    output = scan_netzwerk(netz, scan_argumente)
+    write_output(output, f"{len(output)} Geraet(e) in {netz}")
 
 
 if __name__ == "__main__":

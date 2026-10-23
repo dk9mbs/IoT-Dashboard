@@ -68,8 +68,11 @@ API-Keys und MAC-Adressen prüfen.
   nicht vollständig geschrieben, 127 Befehl nicht gefunden.
 - Agenten mit Ausgabetyp > 1 (`iot_agent.output_type_id`, siehe
   `agents/agent_output.py`) dürfen auf stdout **nur** das JSON
-  `{"data": [...]}` ausgeben – Log-Meldungen nach stderr
-  (`dk9mbs_iot.agent.log` / `write_output`).
+  `{"data": [...], "message": "..."}` ausgeben – Log-Meldungen nach stderr
+  (`dk9mbs_iot.agent.log` / `write_output(items, message)`). Die kurze
+  `message` (bzw. bei Fehlern die des Runners) landet mit Start, Exitcode und
+  Dauer in `iot_agent_status` (`config_id` → `iot_agent_config`), nur bei
+  zentraler Konfiguration.
 
 ## Sprache
 

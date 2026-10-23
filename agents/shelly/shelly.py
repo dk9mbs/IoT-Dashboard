@@ -200,8 +200,9 @@ def main() -> int:
             update_state[geraete_id] = jetzt
 
     _speichere_update_state(update_state)
-    log(f"\n{len(output)}/{len(ergebnisse)} erreichbar")
-    write_output(output)
+    summary = f"{len(output)}/{len(ergebnisse)} erreichbar"
+    log(f"\n{summary}")
+    write_output(output, summary)
     return 0
 
 

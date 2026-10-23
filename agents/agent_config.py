@@ -115,6 +115,7 @@ def fetch_central(cfg: dict):
             agents[name] = {"enabled": False, "settings_error": str(exc)}
             continue
         agents[name] = {
+            "config_id": _value(row, "id"),  # fuer iot_agent_status
             "enabled": _flag(_value(row, "enabled")),
             "every_minutes": int(_value(row, "every_minutes") or 5),
             "timeout_seconds": int(_value(row, "timeout_seconds") or 300),

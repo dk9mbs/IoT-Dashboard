@@ -90,21 +90,25 @@ def main() -> int:
 
     errors = 0
     output = []
+    summary = []  # Kurzmeldung fuer den Runner, z.B. "/ 42 %, /data 80 %"
     for mountpoint in mounts:
         try:
             usage = shutil.disk_usage(mountpoint)
         except OSError as e:
             errors += 1
             log(f"{mountpoint}: nicht lesbar ({e})")
+            summary.append(f"{mountpoint} nicht lesbar")
             continue
-        log(f"{mountpoint}: {METRICS['used_percent'][1](usage)} % belegt, "
+        used_percent = METRICS["used_percent"][1](usage)
+        summary.append(f"{mountpoint} {used_percent} %")
+        log(f"{mountpoint}: {used_percent} % belegt, "
             f"{usage.free / GB:.1f} von {usage.total / GB:.1f} GB frei")
         for metric in metric_names:
             suffix, compute = METRICS[metric]
             output.append({"id": f"disk_{host}_{sensor_name(mountpoint)}{suffix}",
                            "value": compute(usage), "namespace": namespace})
 
-    write_output(output)
+    write_output(output, ", ".join(summary))
     return 1 if errors else 0
 
 

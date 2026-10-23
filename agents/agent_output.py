@@ -4,7 +4,9 @@ Verarbeitung der Agenten-Ausgabe durch den Runner.
 Ein Agent mit Ausgabetyp > 1 (iot_agent.output_type_id) gibt auf stdout nur
 JSON aus, Log-Meldungen gehen nach stderr:
 
-    {"data": [ {...}, {...} ]}      (ein einzelnes Objekt statt Liste geht auch)
+    {"data": [ {...}, {...} ], "message": "..."}
+                                    (ein einzelnes Objekt statt Liste geht auch;
+                                    "message" ist optional, siehe iot_agent_status)
 
 Was mit den Einträgen geschieht, legt der Ausgabetyp fest
 (Tabelle iot_agent_output_type):
@@ -41,15 +43,26 @@ OUTPUT_TYPES = {
 # nur beim Anlegen senden - name wird danach manuell gepflegt
 INSERT_ONLY_FIELDS = ("name", "vendor_id")
 
+MESSAGE_MAX_LENGTH = 250  # iot_agent_status.message
+
 
 class OutputError(ValueError):
     """Ausgabe des Agenten ist kein gültiges JSON im erwarteten Format."""
 
 
-def parse_output(text: str) -> list:
-    """stdout des Agenten -> Liste der Einträge. Leere Ausgabe = keine Einträge."""
+def short_message(text) -> str:
+    """Meldung einzeilig und auf die Feldlänge gekürzt; leer -> None."""
+    text = " ".join(str(text).split()) if text is not None else ""
+    return text[:MESSAGE_MAX_LENGTH] or None
+
+
+def parse_output(text: str) -> tuple:
+    """
+    stdout des Agenten -> (Liste der Einträge, Meldung oder None).
+    Leere Ausgabe = keine Einträge.
+    """
     if not text.strip():
-        return []
+        return [], None
     try:
         document = json.loads(text)
     except ValueError as exc:
@@ -57,13 +70,14 @@ def parse_output(text: str) -> list:
     if not isinstance(document, dict):
         raise OutputError('erwartet ein Objekt {"data": ...}')
     # Schlüssel ohne Rücksicht auf Gross-/Kleinschreibung ("data" / "Data")
-    data = next((v for k, v in document.items() if k.lower() == "data"), None)
+    keys = {k.lower(): v for k, v in document.items()}
+    data = keys.get("data")
     if data is None:
         raise OutputError('Schlüssel "data" fehlt')
     items = data if isinstance(data, list) else [data]
     if not all(isinstance(item, dict) for item in items):
         raise OutputError('"data" muss Objekte enthalten')
-    return items
+    return items, short_message(keys.get("message"))
 
 
 class OutputWriter:
@@ -126,6 +140,23 @@ class OutputWriter:
             self._send("POST", "iot_device", body, f"Gerät {item['id']} neu angelegt")
         else:
             self.log(f"Gerät {item['id']} nicht vorhanden - übersprungen")
+
+    # -- Status des Laufs (iot_agent_status) --------------------------------
+
+    def write_status(self, config_id: int, fields: dict) -> bool:
+        """Schreibt den Status zum iot_agent_config-Datensatz (anlegen oder aktualisieren)."""
+        try:
+            existing_id = self._find("iot_agent_status", "config_id", config_id)
+            body = {"config_id": config_id, **fields}
+            if existing_id:
+                body["id"] = int(existing_id)
+                self._send("PUT", f"iot_agent_status/{existing_id}", body, "Status geschrieben")
+            else:
+                self._send("POST", "iot_agent_status", body, "Status angelegt")
+            return True
+        except (OutputError, OSError, ValueError) as exc:
+            self.log(f"Status nicht geschrieben: {exc}")
+            return False
 
     # -- REST --------------------------------------------------------------
 

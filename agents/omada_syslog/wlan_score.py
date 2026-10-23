@@ -349,7 +349,9 @@ def main():
         sys.exit(1)
 
     log(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
-    write_output(metric_items(cfg, result["metrics"]))
+    write_output(metric_items(cfg, result["metrics"]),
+                 f"Score {result['score']} ({result['level']}), "
+                 f"{result['metrics']['wlan_clients_seen']} Clients")
 
 
 if __name__ == "__main__":
