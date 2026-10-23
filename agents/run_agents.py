@@ -19,11 +19,16 @@ Pro Agent:
   - optional Meldung von Exit-Code und Laufzeit nach iot_sensor_data
     (sensor_id agent_<name>_exit / agent_<name>_duration); eigene Codes:
     124 = Timeout, 125 = Runner-Fehler (z.B. keine Schreibrechte in log_dir),
-    127 = Befehl nicht startbar
+    126 = Ausgabe ungueltig/nicht vollstaendig geschrieben, 127 = Befehl nicht startbar
+  - Ausgabetyp (iot_agent.output_type_id) > 1: der Agent gibt auf stdout nur
+    JSON aus ({"data": [...]}), sein Log auf stderr; der Runner schreibt die
+    Daten per REST (siehe agent_output.py). Typ 1: stdout wie bisher ins Log.
 
 Weitere Aufrufe:
     python3 run_agents.py --list         Status aller Agenten anzeigen
     python3 run_agents.py --run nmap     Agenten sofort ausfuehren (auch wenn deaktiviert)
+    python3 run_agents.py --run nmap --dry-run
+                                         dabei die Ausgabe nur ins Log schreiben, nicht senden
     python3 run_agents.py --all          alle aktiven Agenten sofort ausfuehren
     python3 run_agents.py --daemon       dauerhaft laufen, jede Minute faellige Agenten starten
     python3 run_agents.py --export-sql   bisherige lokale Konfiguration als SQL fuer die
@@ -50,9 +55,11 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 from agent_config import agent_env, export_sql, resolve_agents, rest_settings  # noqa: E402
+from agent_output import OUTPUT_NONE, OUTPUT_TYPES, OutputError, OutputWriter, parse_output  # noqa: E402
 
 TIMEOUT_EXIT = 124       # wie timeout(1)
 RUNNER_ERROR_EXIT = 125  # Runner konnte Sperr-/Log-/Statusdatei nicht schreiben
+OUTPUT_ERROR_EXIT = 126  # Ausgabe des Agenten ungueltig oder nicht vollstaendig geschrieben
 LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -113,6 +120,35 @@ def push_status(cfg: dict, name: str, exit_code: int, duration: float) -> None:
             print(f"[{name}] Status-Meldung {sensor_id} fehlgeschlagen: {exc}", file=sys.stderr)
 
 
+def process_output(cfg: dict, name: str, output_type: int, stdout: str, log) -> bool:
+    """
+    Wertet die JSON-Ausgabe eines Agenten aus und schreibt sie per REST
+    (siehe agent_output.py). Meldungen gehen ins Log des Agenten.
+    Rueckgabe: True, wenn alles verarbeitet wurde.
+    """
+    def write_log(text: str) -> None:
+        log.write(f"[runner] {text}\n")
+        log.flush()
+
+    try:
+        items = parse_output(stdout)
+    except OutputError as exc:
+        write_log(f"Ausgabe nicht verarbeitet: {exc}")
+        write_log(f"stdout (Anfang): {stdout[:500]!r}")
+        return False
+    if not items:
+        write_log("keine Daten ausgegeben")
+        return True
+    try:
+        rest = rest_settings(cfg)
+    except RuntimeError as exc:
+        write_log(f"{len(items)} Eintrag/Eintraege nicht geschrieben: {exc}")
+        return False
+    errors = OutputWriter(rest, name, write_log, dry_run=cfg.get("dry_run", False)).write(output_type, items)
+    write_log(f"{len(items)} Eintrag/Eintraege verarbeitet, {errors} Fehler")
+    return errors == 0
+
+
 def run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
     """Fuehrt einen Agenten aus, wenn er nicht schon laeuft. Ergebnis in results[name].
     Kann der Runner seine Dateien nicht schreiben (z.B. nach Wechsel zwischen
@@ -145,26 +181,37 @@ def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
         rotate_log(log_path)
         timeout = agent.get("timeout_seconds", 300)
         command = agent.get("command", [f"{name}/run.sh"])
+        output_type = int(agent.get("output_type") or OUTPUT_NONE)
         start = time.monotonic()
         with open(log_path, "a", encoding="utf-8") as log:
-            log.write(f"===== {now_str()} start: {' '.join(command)}\n")
+            log.write(f"===== {now_str()} start: {' '.join(command)}"
+                      f" (Ausgabe: {OUTPUT_TYPES.get(output_type, output_type)})\n")
             log.flush()
+            stdout = ""
             try:
                 # eigene Prozessgruppe, damit der Timeout auch Kindprozesse beendet
                 # REST-Zugang (IOT_REST_*) und Einstellungen (IOT_AGENT_SETTINGS) mitgeben
-                proc = subprocess.Popen(command, cwd=BASE_DIR, stdout=log,
-                                        stderr=subprocess.STDOUT, start_new_session=True,
-                                        env={**os.environ, **agent_env(cfg, agent)})
+                # Ausgabetyp > 1: stdout ist das JSON-Ergebnis, das Log kommt ueber stderr
+                proc = subprocess.Popen(command, cwd=BASE_DIR, start_new_session=True,
+                                        stdout=log if output_type == OUTPUT_NONE else subprocess.PIPE,
+                                        stderr=log, env={**os.environ, **agent_env(cfg, agent)})
                 try:
-                    exit_code = proc.wait(timeout=timeout)
+                    # communicate liest stdout waehrend des Laufs (sonst blockiert der
+                    # Agent bei vollem Pipe-Puffer)
+                    out, _ = proc.communicate(timeout=timeout)
+                    stdout = out.decode("utf-8", errors="replace") if out else ""
+                    exit_code = proc.returncode
                 except subprocess.TimeoutExpired:
                     os.killpg(proc.pid, signal.SIGKILL)
-                    proc.wait()
+                    proc.communicate()
                     exit_code = TIMEOUT_EXIT
-                    log.write(f"Timeout nach {timeout} s, abgebrochen\n")
+                    log.write(f"Timeout nach {timeout} s, abgebrochen - Ausgabe verworfen\n")
             except OSError as exc:  # Befehl nicht gefunden o.ae.
                 log.write(f"Start fehlgeschlagen: {exc}\n")
                 exit_code = 127
+            if output_type != OUTPUT_NONE and exit_code not in (TIMEOUT_EXIT, 127):
+                if not process_output(cfg, name, output_type, stdout, log) and exit_code == 0:
+                    exit_code = OUTPUT_ERROR_EXIT
             duration = time.monotonic() - start
             log.write(f"===== {now_str()} ende: exit={exit_code} dauer={duration:.1f}s\n")
         # Ergebnis des letzten Laufs fuer --list
@@ -267,6 +314,8 @@ def main():
     ap.add_argument("--list", action="store_true", help="Status aller Agenten anzeigen")
     ap.add_argument("--daemon", action="store_true",
                     help="dauerhaft laufen und jede Minute faellige Agenten starten")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Ausgabe der Agenten nur ins Log schreiben, nicht per REST senden")
     ap.add_argument("--export-sql", action="store_true",
                     help="bisherige lokale Konfiguration als SQL fuer iot_agent_host/iot_agent_config ausgeben")
     args = ap.parse_args()
@@ -282,6 +331,7 @@ def main():
         return
 
     cfg = load_config(config_path)
+    cfg["dry_run"] = args.dry_run
     agents = cfg["agents"]
 
     if args.list:

@@ -61,7 +61,11 @@ API-Keys und MAC-Adressen prüfen.
   es die eigene Shell.
 - Der XML-Select des REST-Service (`<restapi type="select">`) kann keine zwei
   Felder miteinander vergleichen – solche Auswertungen in Python machen.
-- Runner-Exitcodes: 124 Timeout, 125 Runner-Fehler, 127 Befehl nicht gefunden.
+- Runner-Exitcodes: 124 Timeout, 125 Runner-Fehler, 126 Ausgabe ungültig bzw.
+  nicht vollständig geschrieben, 127 Befehl nicht gefunden.
+- Agenten mit Ausgabetyp > 1 (`iot_agent.output_type_id`, siehe
+  `agents/agent_output.py`) dürfen auf stdout **nur** das JSON
+  `{"data": [...]}` ausgeben – Log-Meldungen nach stderr.
 
 ## Sprache
 

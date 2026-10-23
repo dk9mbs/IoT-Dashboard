@@ -8,8 +8,9 @@ Lokal (agents/agents.json) steht nur der Zugang zum REST-Server:
       "log_dir": "logs" }           # optional
 
 Welche Agenten laufen und mit welchen Einstellungen, steht zentral in den
-Tabellen iot_agent_host / iot_agent_config (Plugin IoTSensorNet). Quellen in
-dieser Reihenfolge:
+Tabellen iot_agent_host / iot_agent_config (Plugin IoTSensorNet), der
+Ausgabetyp je Agent in iot_agent (im lokalen Block: "output_type").
+Quellen in dieser Reihenfolge:
   1. zentral (wird als Kopie in <log_dir>/central_config.json gespeichert)
   2. die letzte Kopie, wenn der Server nicht erreichbar ist
   3. ein lokaler "agents"-Block in agents.json (Uebergang/Test); Agenten ohne
@@ -32,6 +33,7 @@ from xml.sax.saxutils import quoteattr
 AGENTS_DIR = Path(__file__).resolve().parent
 CACHE_NAME = "central_config.json"
 LAST_SEEN_INTERVAL = 600  # last_seen_on hoechstens alle 10 Minuten setzen
+DEFAULT_OUTPUT_TYPE = 1   # iot_agent_output_type "No Action" (siehe agent_output.py)
 
 
 # --------------------------------------------------------------------------
@@ -58,10 +60,11 @@ def host_name(cfg: dict) -> str:
     return cfg.get("host") or socket.gethostname()
 
 
-def _select(rest: dict, table: str, field: str, value: str) -> list:
-    xml = (f'<restapi type="select"><table name={quoteattr(table)} alias="a"/>'
-           f'<filter type="and"><condition field={quoteattr(field)} value={quoteattr(value)} operator="eq" />'
-           f"</filter></restapi>")
+def _select(rest: dict, table: str, field: str = None, value: str = None) -> list:
+    """XML-Select auf table; ohne field alle Datensaetze."""
+    condition = (f'<filter type="and"><condition field={quoteattr(field)} value={quoteattr(value)} '
+                 f'operator="eq" /></filter>' if field else "")
+    xml = f'<restapi type="select"><table name={quoteattr(table)} alias="a"/>{condition}</restapi>'
     req = urllib.request.Request(
         f"{rest['base_url']}/data", data=xml.encode("utf-8"), method="POST",
         headers={"Content-Type": "application/xml", "apikey": rest["apikey"]})
@@ -99,6 +102,7 @@ def fetch_central(cfg: dict):
     hosts = _select(rest, "iot_agent_host", "id", host)
     if not hosts:
         return None
+    output_types = fetch_output_types(rest)
     agents = {}
     for row in _select(rest, "iot_agent_config", "host_id", host):
         name = _value(row, "agent")
@@ -115,8 +119,30 @@ def fetch_central(cfg: dict):
             "every_minutes": int(_value(row, "every_minutes") or 5),
             "timeout_seconds": int(_value(row, "timeout_seconds") or 300),
             "settings": settings,
+            "output_type": output_types.get(name, DEFAULT_OUTPUT_TYPE),
         }
     return {"host": host, "enabled": _flag(_value(hosts[0], "enabled")), "agents": agents}
+
+
+def fetch_output_types(rest: dict) -> dict:
+    """
+    Ausgabetyp je Agent aus iot_agent ({name: output_type_id}). Fehlt die
+    Tabelle (Plugin noch nicht aktualisiert), gilt fuer alle "No Action", statt
+    die ganze zentrale Konfiguration zu verwerfen.
+    """
+    try:
+        rows = _select(rest, "iot_agent")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"[config] iot_agent nicht lesbar ({exc}) - Ausgabetyp 1 (No Action) fuer alle",
+              file=sys.stderr, flush=True)
+        return {}
+    types = {}
+    for row in rows:
+        try:
+            types[_value(row, "id")] = int(_value(row, "output_type_id") or DEFAULT_OUTPUT_TYPE)
+        except (TypeError, ValueError):
+            types[_value(row, "id")] = DEFAULT_OUTPUT_TYPE
+    return types
 
 
 def touch_host(cfg: dict) -> None:
