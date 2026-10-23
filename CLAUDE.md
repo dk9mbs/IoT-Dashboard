@@ -46,8 +46,10 @@ API-Keys und MAC-Adressen prüfen.
   (Hostname bzw. ID) und sonst manuell gepflegt. Bestehende Einträge zuerst
   über die MAC suchen.
 - Shellys fragt der Agent `shelly` per HTTP ab (setzt ebenfalls
-  `last_scan_on`, dazu WLAN, Firmware, Update; Ausgabetyp 4, schreibt also
-  über den Runner); nmap legt sie nur an.
+  `last_scan_on`, dazu WLAN, Firmware, Update); nmap legt sie nur an.
+- Ausgabetypen: nmap 3 (Add/Update Device), shelly 4 (Update Device),
+  omada_syslog und disk_usage 2 (Add Sensor Value), notify 1 (No Action).
+  Geschrieben wird nur noch über den Runner; gelesen wird weiterhin im Agenten.
 - `mac` nur senden, wenn bekannt – **immer ohne Fallback**.
 - Als bekannt (z. B. WLAN-Score) zählen nur Geräte mit Status `active`.
 - „Neu“ = Status `new` aller Hersteller; „Offline“ nur Shellys.

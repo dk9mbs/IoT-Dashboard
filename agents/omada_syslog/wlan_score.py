@@ -4,18 +4,19 @@ wlan_score.py - Ermittelt einen WLAN-Sicherheitsscore (0-100) aus den
 Syslog-Dateien der Omada-Access-Points (eine Datei pro AP: <ip>.log).
 
 Aufruf:
-    python3 wlan_score.py [--config settings.json] [--pretty] [--push]
+    python3 wlan_score.py [--config settings.json] [--pretty]
 
 Die Einstellungen (APs, Muster, Bewertung ...) kommen zentral aus
 iot_agent_config.settings und werden vom Runner als IOT_AGENT_SETTINGS
 mitgegeben (Vorlage: settings.json.skelet); --config liest sie stattdessen
 aus einer Datei.
 
-Ausgabe: JSON auf stdout (Score, Ampel, Einzelwerte, Abzuege).
-Mit --push werden die Kennzahlen ("metrics") zusaetzlich als Datensaetze in
-die REST-Tabelle iot_sensor_data geschrieben (sensor_id = wlan_<kennzahl>).
-URL und API-Key gibt der Agenten-Runner mit (IOT_REST_*), der Namespace
-kommt aus dem rest-Block der Einstellungen.
+Ausgabetyp 2 (Add Sensor Value): die Kennzahlen ("metrics") gehen als JSON
+{"data": [...]} auf stdout (sensor_id = wlan_<kennzahl>, Namespace aus dem
+rest-Block der Einstellungen); der Runner schreibt sie nach iot_sensor_data.
+Das vollstaendige Ergebnis (Score, Ampel, Einzelwerte, Abzuege) steht im Log
+(stderr). Den REST-Zugang (IOT_REST_*) braucht der Agent nur noch zum Lesen
+der bekannten MACs aus iot_device.
 """
 
 import argparse
@@ -24,13 +25,11 @@ import ipaddress
 import json
 import re
 import sys
-import urllib.error
-import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from dk9mbs_iot.agent import rest_from_env, settings_from_env  # vom Agenten-Runner
+from dk9mbs_iot.agent import log, rest_from_env, settings_from_env, write_output  # vom Agenten-Runner
 from dk9mbs_iot.query.device import IotDeviceClient
 
 AGENT_DIR = Path(__file__).resolve().parent
@@ -147,29 +146,11 @@ def get_known_macs(rest: dict) -> dict:
     return macs
 
 
-def push_metrics(cfg: dict, metrics: dict, rest: dict) -> list:
-    """Schreibt jede Kennzahl als eigenen Datensatz nach iot_sensor_data.
-    rest: Zugangsdaten (base_url, apikey, timeout) vom Agenten-Runner.
-    Rueckgabe: Liste der Fehlermeldungen (leer = alles ok)."""
-    url = f"{rest['base_url']}/data/iot_sensor_data"
+def metric_items(cfg: dict, metrics: dict) -> list:
+    """Kennzahlen als Eintraege fuer den Runner (Ausgabetyp Add Sensor Value)."""
     namespace = cfg.get("rest", {}).get("namespace", "wlan.score")
-    headers = {"Content-Type": "application/json", "apikey": rest["apikey"]}
-    errors = []
-    for sensor_id, value in metrics.items():
-        body = json.dumps({
-            "sensor_id": sensor_id,
-            "sensor_namespace": namespace,
-            "sensor_value": value,
-        }).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=rest["timeout"]):
-                pass
-        except urllib.error.HTTPError as exc:
-            errors.append(f"{sensor_id}: HTTP {exc.code} {exc.read()[:200].decode(errors='replace')}")
-        except (urllib.error.URLError, OSError) as exc:
-            errors.append(f"{sensor_id}: {exc}")
-    return errors
+    return [{"id": sensor_id, "value": value, "namespace": namespace}
+            for sensor_id, value in metrics.items()]
 
 
 def capped(value: int, cap) -> int:
@@ -343,11 +324,8 @@ def main():
     ap = argparse.ArgumentParser(description="WLAN-Sicherheitsscore aus Omada-Syslogs")
     ap.add_argument("--config", default=None,
                     help="Einstellungen aus dieser JSON-Datei statt vom Runner (IOT_AGENT_SETTINGS)")
-    ap.add_argument("--pretty", action="store_true", help="JSON eingerueckt ausgeben")
-    ap.add_argument("--push", action="store_true",
-                    help="Kennzahlen per REST nach iot_sensor_data schreiben")
+    ap.add_argument("--pretty", action="store_true", help="Ergebnis im Log eingerueckt ausgeben")
     args = ap.parse_args()
-    push_errors = []
 
     try:
         if args.config:
@@ -363,25 +341,16 @@ def main():
         # relative Pfade beziehen sich auf den Ordner der Config bzw. des Agenten
         if not Path(cfg["log_dir"]).is_absolute():
             cfg["log_dir"] = str(base_dir / cfg["log_dir"])
-        # REST-Zugang vom Runner: bekannte MACs aus iot_device und ggf. --push
+        # REST-Zugang vom Runner: bekannte MACs aus iot_device
         rest = rest_from_env()
         result = compute_score(cfg, rest)
-        if args.push:
-            push_errors = push_metrics(cfg, result["metrics"], rest)
-            ok = len(result["metrics"]) - len(push_errors)
-            print(f"{ok}/{len(result['metrics'])} Kennzahl(en) an {rest['base_url']} gesendet",
-                  file=sys.stderr)
-            for err in push_errors:
-                print(f"  Fehler: {err}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001
-        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        log(json.dumps({"error": str(exc)}))
         sys.exit(1)
 
-    print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
-    if push_errors:
-        sys.exit(2)
+    log(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
+    write_output(metric_items(cfg, result["metrics"]))
 
 
 if __name__ == "__main__":
     main()
-
