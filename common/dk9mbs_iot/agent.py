@@ -3,6 +3,7 @@ Umgebung eines Agenten. Der Agenten-Runner (agents/run_agents.py) setzt:
 
     IOT_REST_BASE_URL, IOT_REST_APIKEY, IOT_REST_TIMEOUT   REST-Zugang
     IOT_AGENT_SETTINGS                                     Einstellungen (JSON)
+    IOT_DRY_RUN                                            "1" bei run_agents.py --dry-run
 
 Die Einstellungen kommen zentral aus iot_agent_config.settings.
 
@@ -22,18 +23,27 @@ def log(*args) -> None:
     print(*args, file=sys.stderr, flush=True)
 
 
-def write_output(items: list, message: str = None) -> None:
+def write_output(items: list, message: str = None, notify=None) -> None:
     """
-    Ergebnis für den Runner: {"data": [...], "message": "..."} als einzige
-    Ausgabe auf stdout. message ist eine kurze Meldung zum Lauf (z.B.
-    "30/32 erreichbar"), der Runner speichert sie in iot_agent_status.
+    Ergebnis für den Runner: {"data": [...], "message": "...", "notify": [...]}
+    als einzige Ausgabe auf stdout. message ist eine kurze Meldung zum Lauf
+    (z.B. "30/32 erreichbar"), der Runner speichert sie in iot_agent_status.
+    notify (Text oder Liste von Texten) stellt der Runner als Benachrichtigungen
+    in die Warteschlange iot_notification, verschickt vom Agenten notify.
     """
     document = {"data": items}
     if message:
         document["message"] = message
+    if notify:
+        document["notify"] = notify
     json.dump(document, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
     sys.stdout.flush()
+
+
+def dry_run_from_env() -> bool:
+    """True, wenn der Runner mit --dry-run läuft: nichts senden, keinen Zustand speichern."""
+    return os.environ.get("IOT_DRY_RUN") == "1"
 
 
 def rest_from_env() -> dict:

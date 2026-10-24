@@ -6,5 +6,6 @@
   "NEXTCLOUD_TALK_ROOM_TOKEN": "",
   "TELEGRAM_ENABLED": false,
   "TELEGRAM_BOT_TOKEN": "",
-  "TELEGRAM_CHAT_ID": ""
+  "TELEGRAM_CHAT_ID": "",
+  "max_attempts": 5
 }

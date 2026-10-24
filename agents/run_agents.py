@@ -23,7 +23,10 @@ Pro Agent:
   - Ausgabetyp (iot_agent.output_type_id) > 1: der Agent gibt auf stdout nur
     JSON aus ({"data": [...], "message": "..."}), sein Log auf stderr; der
     Runner schreibt die Daten per REST (siehe agent_output.py). Typ 1: stdout
-    wie bisher ins Log.
+    wie bisher ins Log, ausser es ist ein JSON-Objekt.
+  - "notify": [...] in der JSON-Ausgabe (jeder Ausgabetyp) -> Benachrichtigungen
+    in die Warteschlange iot_notification; verschickt werden sie vom Agenten
+    notify (Ausgabetyp 5, Update Notification).
   - Ergebnis des Laufs (Start, Exit-Code, Dauer, Meldung) nach iot_agent_status,
     wenn die Konfiguration zentral kommt; die Meldung ist die "message" des
     Agenten bzw. bei Fehlern die des Runners.
@@ -133,33 +136,50 @@ def log_writer(log):
     return write_log
 
 
-def process_output(cfg: dict, name: str, output_type: int, stdout: str, write_log) -> tuple:
+def is_json_output(stdout: str) -> bool:
+    """Ausgabetyp 1: nur ein JSON-Objekt wird ausgewertet, sonst ist stdout Log."""
+    return stdout.lstrip().startswith("{")
+
+
+def process_output(cfg: dict, name: str, agent: dict, output_type: int, stdout: str,
+                   write_log) -> tuple:
     """
     Wertet die JSON-Ausgabe eines Agenten aus und schreibt sie per REST
-    (siehe agent_output.py). Meldungen gehen ins Log des Agenten.
+    (siehe agent_output.py): die Daten je nach Ausgabetyp, "notify" in die
+    Warteschlange iot_notification. Meldungen gehen ins Log des Agenten.
     Rueckgabe: (ok, Meldung) - ok ist True, wenn alles verarbeitet wurde;
     die Meldung ist die des Agenten, bei Fehlern ergaenzt bzw. ersetzt.
     """
     try:
-        items, message = parse_output(stdout)
+        items, message, notifications = parse_output(stdout, require_data=output_type != OUTPUT_NONE)
     except OutputError as exc:
         write_log(f"Ausgabe nicht verarbeitet: {exc}")
         write_log(f"stdout (Anfang): {stdout[:500]!r}")
         return False, f"Ausgabe ungueltig: {exc}"
     if message:
         write_log(f"Meldung: {message}")
-    if not items:
+    if items and output_type == OUTPUT_NONE:
+        write_log(f"{len(items)} Eintrag/Eintraege ignoriert (Ausgabetyp No Action)")
+        items = []
+    if not items and not notifications:
         write_log("keine Daten ausgegeben")
         return True, message
     try:
         rest = rest_settings(cfg)
     except RuntimeError as exc:
-        write_log(f"{len(items)} Eintrag/Eintraege nicht geschrieben: {exc}")
+        write_log(f"{len(items) + len(notifications)} Eintrag/Eintraege nicht geschrieben: {exc}")
         return False, f"nicht geschrieben: {exc}"
-    errors = OutputWriter(rest, name, write_log, dry_run=cfg.get("dry_run", False)).write(output_type, items)
-    write_log(f"{len(items)} Eintrag/Eintraege verarbeitet, {errors} Fehler")
+    writer = OutputWriter(rest, name, write_log, dry_run=cfg.get("dry_run", False))
+    errors = 0
+    if items:
+        errors += writer.write(output_type, items)
+    if notifications:
+        errors += writer.write_notifications(agent.get("config_id"), notifications)
+    total = len(items) + len(notifications)
+    write_log(f"{len(items)} Eintrag/Eintraege und {len(notifications)} Benachrichtigung(en) "
+              f"verarbeitet, {errors} Fehler")
     if errors:
-        failed = f"{errors} von {len(items)} Eintraegen nicht geschrieben"
+        failed = f"{errors} von {total} Eintraegen nicht geschrieben"
         return False, f"{message} - {failed}" if message else failed
     return True, message
 
@@ -231,10 +251,10 @@ def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
             try:
                 # eigene Prozessgruppe, damit der Timeout auch Kindprozesse beendet
                 # REST-Zugang (IOT_REST_*) und Einstellungen (IOT_AGENT_SETTINGS) mitgeben
-                # Ausgabetyp > 1: stdout ist das JSON-Ergebnis, das Log kommt ueber stderr
+                # stdout ist das JSON-Ergebnis (bei Typ 1 evtl. Log), das Log kommt ueber stderr
                 proc = subprocess.Popen(command, cwd=BASE_DIR, start_new_session=True,
-                                        stdout=log if output_type == OUTPUT_NONE else subprocess.PIPE,
-                                        stderr=log, env={**os.environ, **agent_env(cfg, agent)})
+                                        stdout=subprocess.PIPE, stderr=log,
+                                        env={**os.environ, **agent_env(cfg, agent)})
                 try:
                     # communicate liest stdout waehrend des Laufs (sonst blockiert der
                     # Agent bei vollem Pipe-Puffer)
@@ -243,7 +263,9 @@ def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
                     exit_code = proc.returncode
                 except subprocess.TimeoutExpired:
                     os.killpg(proc.pid, signal.SIGKILL)
-                    proc.communicate()
+                    out, _ = proc.communicate()
+                    if output_type == OUTPUT_NONE and out:
+                        log.write(out.decode("utf-8", errors="replace"))
                     exit_code = TIMEOUT_EXIT
                     message = f"Timeout nach {timeout} s"
                     log.write(f"Timeout nach {timeout} s, abgebrochen - Ausgabe verworfen\n")
@@ -251,8 +273,10 @@ def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
                 log.write(f"Start fehlgeschlagen: {exc}\n")
                 exit_code = 127
                 message = f"Start fehlgeschlagen: {exc}"
-            if output_type != OUTPUT_NONE and exit_code not in (TIMEOUT_EXIT, 127):
-                ok, message = process_output(cfg, name, output_type, stdout, write_log)
+            if output_type == OUTPUT_NONE and not is_json_output(stdout):
+                log.write(stdout)  # Typ 1 ohne JSON: stdout ist Log
+            elif exit_code not in (TIMEOUT_EXIT, 127):
+                ok, message = process_output(cfg, name, agent, output_type, stdout, write_log)
                 if not ok and exit_code == 0:
                     exit_code = OUTPUT_ERROR_EXIT
             if not message and exit_code != 0:

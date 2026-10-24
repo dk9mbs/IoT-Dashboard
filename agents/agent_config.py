@@ -271,6 +271,9 @@ def agent_env(cfg: dict, agent: dict) -> dict:
         })
     except RuntimeError:
         pass
+    if cfg.get("dry_run"):
+        # Agenten mit eigenem Zustand/Versand (watchdog, notify) aendern dann nichts
+        env["IOT_DRY_RUN"] = "1"
     if sys.prefix != sys.base_prefix:
         # Runner laeuft im venv (z.B. als Dienst) -> Agenten mit demselben Python starten
         env["IOT_PYTHON"] = sys.executable

@@ -7,7 +7,8 @@ IoTSensorNet, MySQL-DB `tuxlog`).
 ## Aufbau
 
 - `dashboard/` – Flask-App, **rein passive Anzeige** (einzige Aktion:
-  Firmware-Update-Knopf). Benachrichtigungen verschickt `agents/notify`.
+  Firmware-Update-Knopf). Benachrichtigungen erkennt `agents/watchdog`,
+  verschickt `agents/notify` (Warteschlange `iot_notification`).
 - `agents/` – ein Verzeichnis je Agent mit eigenem `run.sh`
   (nmap, notify, omada_syslog, …). Gestartet vom Runner `agents/run_agents.py`
   (`--run <name>`, `--all`, `--list`, `--daemon`, `--export-sql`).
@@ -48,7 +49,8 @@ API-Keys und MAC-Adressen prüfen.
 - Shellys fragt der Agent `shelly` per HTTP ab (setzt ebenfalls
   `last_scan_on`, dazu WLAN, Firmware, Update); nmap legt sie nur an.
 - Ausgabetypen: nmap 3 (Add/Update Device), shelly 4 (Update Device),
-  omada_syslog und disk_usage 2 (Add Sensor Value), notify 1 (No Action).
+  omada_syslog und disk_usage 2 (Add Sensor Value), watchdog 1 (No Action),
+  notify 5 (Update Notification – setzt nur Meldungen auf `sent`/`failed`).
   Geschrieben wird nur noch über den Runner; gelesen wird weiterhin im Agenten.
 - `mac` nur senden, wenn bekannt – **immer ohne Fallback**.
 - Als bekannt (z. B. WLAN-Score) zählen nur Geräte mit Status `active`.
@@ -73,6 +75,11 @@ API-Keys und MAC-Adressen prüfen.
   `message` (bzw. bei Fehlern die des Runners) landet mit Start, Exitcode und
   Dauer in `iot_agent_status` (`config_id` → `iot_agent_config`), nur bei
   zentraler Konfiguration.
+- Benachrichtigungen: jeder Agent kann `"notify": ["Text", …]` mit ausgeben
+  (`write_output(items, message, notify)`, auch bei Ausgabetyp 1); der Runner
+  legt sie in `iot_notification` (status `new`) an. Erkennen gehört nicht in
+  den Versand-Agenten – notify liest nur die Warteschlange und ist austauschbar.
+  Agenten mit eigenem Zustand/Versand beachten `IOT_DRY_RUN` (`--dry-run`).
 
 ## Sprache
 

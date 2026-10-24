@@ -4,9 +4,15 @@ Verarbeitung der Agenten-Ausgabe durch den Runner.
 Ein Agent mit Ausgabetyp > 1 (iot_agent.output_type_id) gibt auf stdout nur
 JSON aus, Log-Meldungen gehen nach stderr:
 
-    {"data": [ {...}, {...} ], "message": "..."}
+    {"data": [ {...}, {...} ], "message": "...", "notify": ["...", ...]}
                                     (ein einzelnes Objekt statt Liste geht auch;
                                     "message" ist optional, siehe iot_agent_status)
+
+"notify" (optional, Text oder Liste von Texten) stellt unabhängig vom
+Ausgabetyp Benachrichtigungen in die Warteschlange iot_notification (status
+'new'). Verschickt werden sie von einem Agenten mit Ausgabetyp 5. Auch ein
+Agent mit Ausgabetyp 1 darf dafür JSON ausgeben ("data" ist dann optional und
+wird ignoriert); andere Ausgaben landen bei Typ 1 wie bisher im Log.
 
 Was mit den Einträgen geschieht, legt der Ausgabetyp fest
 (Tabelle iot_agent_output_type):
@@ -20,6 +26,11 @@ Was mit den Einträgen geschieht, legt der Ausgabetyp fest
                           INSERT_ONLY_FIELDS werden nur beim Anlegen gesendet,
                           "name" ist dann vorbelegt mit host_name bzw. id.
     4  Update Device      wie 3, legt aber nie an (nicht gefunden = übersprungen)
+    5  Update Notification
+                          je Eintrag {"id", "status_id" ('sent'/'failed'),
+                          optional "attempts", "last_error", "sent_on"}
+                          -> PUT iot_notification/<id>; nur diese Felder,
+                          damit sich der Versand-Agent austauschen lässt
 """
 
 import json
@@ -32,18 +43,23 @@ OUTPUT_NONE = 1
 OUTPUT_SENSOR_VALUE = 2
 OUTPUT_DEVICE_UPSERT = 3
 OUTPUT_DEVICE_UPDATE = 4
+OUTPUT_NOTIFICATION_UPDATE = 5
 
 OUTPUT_TYPES = {
     OUTPUT_NONE: "No Action",
     OUTPUT_SENSOR_VALUE: "Add Sensor Value",
     OUTPUT_DEVICE_UPSERT: "Add/Update Device",
     OUTPUT_DEVICE_UPDATE: "Update Device",
+    OUTPUT_NOTIFICATION_UPDATE: "Update Notification",
 }
 
 # nur beim Anlegen senden - name wird danach manuell gepflegt
 INSERT_ONLY_FIELDS = ("name", "vendor_id")
 
 MESSAGE_MAX_LENGTH = 250  # iot_agent_status.message
+NOTIFICATION_MAX_LENGTH = 1000  # iot_notification.message
+NOTIFICATION_STATUSES = ("sent", "failed")  # darf der Versand-Agent setzen
+NOTIFICATION_FIELDS = ("status_id", "attempts", "last_error", "sent_on")
 
 
 class OutputError(ValueError):
@@ -56,13 +72,14 @@ def short_message(text) -> str:
     return text[:MESSAGE_MAX_LENGTH] or None
 
 
-def parse_output(text: str) -> tuple:
+def parse_output(text: str, require_data: bool = True) -> tuple:
     """
-    stdout des Agenten -> (Liste der Einträge, Meldung oder None).
-    Leere Ausgabe = keine Einträge.
+    stdout des Agenten -> (Liste der Einträge, Meldung oder None,
+    Liste der Benachrichtigungen). Leere Ausgabe = keine Einträge.
+    require_data=False (Ausgabetyp 1): "data" darf fehlen.
     """
     if not text.strip():
-        return [], None
+        return [], None, []
     try:
         document = json.loads(text)
     except ValueError as exc:
@@ -72,12 +89,17 @@ def parse_output(text: str) -> tuple:
     # Schlüssel ohne Rücksicht auf Gross-/Kleinschreibung ("data" / "Data")
     keys = {k.lower(): v for k, v in document.items()}
     data = keys.get("data")
-    if data is None:
+    if data is None and require_data:
         raise OutputError('Schlüssel "data" fehlt')
-    items = data if isinstance(data, list) else [data]
+    items = [] if data is None else data if isinstance(data, list) else [data]
     if not all(isinstance(item, dict) for item in items):
         raise OutputError('"data" muss Objekte enthalten')
-    return items, short_message(keys.get("message"))
+    notify = keys.get("notify")
+    notify = [] if notify is None else notify if isinstance(notify, list) else [notify]
+    if not all(isinstance(text, str) for text in notify):
+        raise OutputError('"notify" muss Text oder eine Liste von Texten sein')
+    notifications = [text.strip()[:NOTIFICATION_MAX_LENGTH] for text in notify if text.strip()]
+    return items, short_message(keys.get("message")), notifications
 
 
 class OutputWriter:
@@ -95,6 +117,7 @@ class OutputWriter:
             OUTPUT_SENSOR_VALUE: self._sensor_value,
             OUTPUT_DEVICE_UPSERT: lambda item: self._device(item, insert=True),
             OUTPUT_DEVICE_UPDATE: lambda item: self._device(item, insert=False),
+            OUTPUT_NOTIFICATION_UPDATE: self._notification_update,
         }.get(output_type)
         if handler is None:
             self.log(f"Ausgabetyp {output_type} unbekannt - {len(items)} Eintrag/Einträge verworfen")
@@ -140,6 +163,38 @@ class OutputWriter:
             self._send("POST", "iot_device", body, f"Gerät {item['id']} neu angelegt")
         else:
             self.log(f"Gerät {item['id']} nicht vorhanden - übersprungen")
+
+    # -- Update Notification -------------------------------------------------
+
+    def _notification_update(self, item: dict) -> None:
+        try:
+            notification_id = int(item.get("id"))
+        except (TypeError, ValueError):
+            raise OutputError('Benachrichtigung braucht eine numerische "id"') from None
+        if item.get("status_id") not in NOTIFICATION_STATUSES:
+            raise OutputError(f'"status_id" muss {" oder ".join(NOTIFICATION_STATUSES)} sein')
+        body = {k: item[k] for k in NOTIFICATION_FIELDS if k in item}
+        if body.get("last_error") is not None:
+            body["last_error"] = short_message(body["last_error"])
+        body["id"] = notification_id
+        self._send("PUT", f"iot_notification/{notification_id}", body,
+                   f"Benachrichtigung {notification_id}: {item['status_id']}")
+
+    # -- Benachrichtigungen einstellen (iot_notification) --------------------
+
+    def write_notifications(self, config_id, texts: list) -> int:
+        """Legt die Benachrichtigungen mit status 'new' an; Rückgabe: Anzahl Fehler."""
+        errors = 0
+        for text in texts:
+            body = {"message": text, "status_id": "new"}
+            if config_id:
+                body["config_id"] = int(config_id)
+            try:
+                self._send("POST", "iot_notification", body, f"Benachrichtigung eingestellt: {text[:100]}")
+            except (OutputError, OSError) as exc:
+                errors += 1
+                self.log(f"Fehler: Benachrichtigung nicht eingestellt: {exc} - {text[:200]}")
+        return errors
 
     # -- Status des Laufs (iot_agent_status) --------------------------------
 
