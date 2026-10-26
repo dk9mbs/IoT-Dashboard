@@ -1,0 +1,37 @@
+{
+  "known_devices_file": "known_devices.json",
+
+  "scoring": {
+    "threshold": 50,
+    "weights": {
+      "unknown_source": 35,
+      "external_source": 25,
+      "write": 10,
+      "sensitive_action": 25,
+      "night": 10,
+      "irregular": 5,
+      "high_rate": 20,
+      "new_source": 30,
+      "rate_deviation": 15,
+      "internal": -20,
+      "cloud_read": -10
+    },
+    "night_hours": {"start": 0, "end": 5},
+    "high_rate_per_minute": 60,
+    "rate_deviation_factor": 5,
+    "trust_shelly_cloud": true,
+    "sensitive_actions": [
+      "Sys.SetConfig", "WiFi.SetConfig", "Eth.SetConfig", "Mqtt.SetConfig", "Cloud.SetConfig",
+      "Ws.SetConfig", "BLE.SetConfig", "Shelly.SetAuth", "User.SetConfig", "Shelly.Update",
+      "Shelly.Reboot", "Shelly.FactoryReset", "Shelly.ResetWiFiConfig", "Script.PutCode",
+      "Script.Create", "Script.Delete", "Script.SetConfig", "Schedule.Create", "Webhook.Create",
+      "KVS.Set"
+    ]
+  },
+
+  "history": {
+    "enabled": true,
+    "file": "shelly_access_history.json",
+    "baseline_days": 7
+  }
+}

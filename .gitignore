@@ -45,3 +45,10 @@ agents/nmap/vendor_cache.json
 
 # Shelly-Agent: Zeitpunkt der letzten Update-Pruefung je Geraet (wird automatisch angelegt)
 agents/shelly/update_check_state.json
+
+# Shelly-Syslog-Agent: bekannte Geräte der CLI (Netzwerkdaten, nicht die .skelet-Vorlage),
+# Historie und Benachrichtigungs-Zustand (werden automatisch angelegt), Reports
+agents/shelly_syslog/known_devices.json
+agents/shelly_syslog/shelly_access_history.json
+agents/shelly_syslog/notify_state.json
+agents/shelly_syslog/report*.json

@@ -1,0 +1,7 @@
+{
+  "devices": [
+    {"address": "192.168.0.10",  "name": "Beispiel: Monitoring-Server"},
+    {"address": "192.168.0.20",  "name": "Beispiel: PC (Web-Oberfläche)"},
+    {"mqtt_client": "iobroker",  "name": "Beispiel: ioBroker"}
+  ]
+}
