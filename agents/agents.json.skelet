@@ -2,7 +2,6 @@
   "rest": {
     "base_url": "https://dk9mbs.de/api/v1.0",
     "apikey": "",
-    "namespace": "agents",
     "timeout": 10
   },
   "host": "",

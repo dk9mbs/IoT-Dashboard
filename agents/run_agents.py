@@ -16,9 +16,7 @@ Pro Agent:
   - Sperrdatei, damit ein noch laufender Agent nicht doppelt startet
   - Timeout, der die ganze Prozessgruppe beendet (auch Kindprozesse)
   - eigene Logdatei <log_dir>/<name>.log
-  - optional Meldung von Exit-Code und Laufzeit nach iot_sensor_data
-    (sensor_id agent_<name>_exit / agent_<name>_duration); eigene Codes:
-    124 = Timeout, 125 = Runner-Fehler (z.B. keine Schreibrechte in log_dir),
+  - eigene Exit-Codes: 124 = Timeout, 125 = Runner-Fehler (z.B. keine Schreibrechte in log_dir),
     126 = Ausgabe ungueltig/nicht vollstaendig geschrieben, 127 = Befehl nicht startbar
   - Ausgabetyp (iot_agent.output_type_id) > 1: der Agent gibt auf stdout nur
     JSON aus ({"data": [...], "message": "..."}), sein Log auf stderr; der
@@ -54,8 +52,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -103,29 +99,6 @@ def is_due(agent: dict, lock_path: Path, now: float) -> bool:
 def rotate_log(log_path: Path) -> None:
     if log_path.exists() and log_path.stat().st_size > LOG_MAX_BYTES:
         log_path.replace(log_path.with_suffix(".log.1"))
-
-
-def push_status(cfg: dict, name: str, exit_code: int, duration: float) -> None:
-    try:
-        rest = rest_settings(cfg)
-    except RuntimeError:
-        return  # ohne REST-Zugang keine Status-Meldung
-    url = f"{rest['base_url']}/data/iot_sensor_data"
-    namespace = cfg["rest"].get("namespace", "agents")
-    headers = {"Content-Type": "application/json", "apikey": rest["apikey"]}
-    for sensor_id, value in ((f"agent_{name}_exit", exit_code),
-                             (f"agent_{name}_duration", round(duration, 1))):
-        body = json.dumps({
-            "sensor_id": sensor_id,
-            "sensor_namespace": namespace,
-            "sensor_value": value,
-        }).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=rest["timeout"]):
-                pass
-        except (urllib.error.URLError, OSError) as exc:
-            print(f"[{name}] Status-Meldung {sensor_id} fehlgeschlagen: {exc}", file=sys.stderr)
 
 
 def log_writer(log):
@@ -212,7 +185,6 @@ def run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
         _run_agent(cfg, name, agent, results)
     except OSError as exc:
         print(f"[{name}] Runner-Fehler: {exc}", file=sys.stderr, flush=True)
-        push_status(cfg, name, RUNNER_ERROR_EXIT, 0.0)
         write_agent_status(cfg, name, agent, started_on, RUNNER_ERROR_EXIT, 0.0,
                            f"Runner-Fehler: {exc}",
                            lambda text: print(f"[{name}] {text}", file=sys.stderr, flush=True))
@@ -290,7 +262,6 @@ def _run_agent(cfg: dict, name: str, agent: dict, results: dict) -> None:
             {"exit": exit_code, "duration": round(duration, 1), "end": time.time(),
              "message": short_message(message)}, ensure_ascii=False))
 
-    push_status(cfg, name, exit_code, duration)
     results[name] = f"exit={exit_code} dauer={duration:.1f}s"
 
 
