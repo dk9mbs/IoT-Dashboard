@@ -1,6 +1,6 @@
 # Agent shelly_syslog (Shelly Access Report)
 
-Wertet die Syslogs der Shelly-Geräte aus: **wer hat auf welchen Shelly zugegriffen** und wie auffällig ist das? Jede Zugriffsgruppe bekommt einen Auffälligkeits-Score. Läuft als Runner-Agent (Ausgabetyp 2, Add Sensor Value) auf dem Host `nextcloud`, der die Shelly-Syslogs empfängt (`/var/log/shelly`). Das Kernmodul ist zusätzlich eigenständig als CLI nutzbar.
+Wertet die Syslogs der Shelly-Geräte aus: **wer hat auf welchen Shelly zugegriffen** und wie auffällig ist das? Jede Zugriffsgruppe bekommt einen Auffälligkeits-Score (Bericht). Der Agent meldet daraus nur eine Kennzahl: wie viele **fremde IPs** zugegriffen haben. Läuft als Runner-Agent (Ausgabetyp 2, Add Sensor Value) auf dem Host `nextcloud`, der die Shelly-Syslogs empfängt (`/var/log/shelly`). Das Kernmodul ist zusätzlich eigenständig als CLI nutzbar.
 
 > Dieser Ordner liegt als **Unterordner** im Projekt IoT-Dashboard. Pfade in dieser Datei gelten **relativ zu diesem Ordner** (außer `agents/run_agents.py`).
 
@@ -8,7 +8,7 @@ Wertet die Syslogs der Shelly-Geräte aus: **wer hat auf welchen Shelly zugegrif
 
 | Datei | Zweck |
 |---|---|
-| `shelly_syslog.py` | Runner-Agent: liest Einstellungen/REST-Zugang vom Runner, gibt Sensorwerte und `notify` aus |
+| `shelly_syslog.py` | Runner-Agent: liest Einstellungen/REST-Zugang vom Runner, gibt die Kennzahl `foreign_ips` und `notify` aus |
 | `run.sh` | Startskript für den Runner (wie bei den anderen Agenten) |
 | `SCORE.md` | Doku des Auffälligkeits-Scores mit Beispielen. **Bei Änderungen an Gewichten oder Faktoren mitpflegen** |
 | `settings.json.skelet` | Vorlage der zentralen Einstellungen (`iot_agent_config.settings`) |
@@ -18,7 +18,7 @@ Wertet die Syslogs der Shelly-Geräte aus: **wer hat auf welchen Shelly zugegrif
 | `known_devices.json` | Bekannte Geräte nur für die eigenständige CLI (der Agent nimmt `iot_device`). Enthält Netzwerkdaten, **nicht einchecken** |
 | `known_devices.json.skelet` | Vorlage mit Demo-Werten (wird eingecheckt). Für eine neue Installation nach `known_devices.json` kopieren |
 | `shelly_access_history.json` | Wird automatisch geschrieben (frühere Läufe). Nicht einchecken |
-| `notify_state.json` | Wird automatisch geschrieben (bereits gemeldete auffällige Zugriffe). Nicht einchecken |
+| `notify_state.json` | Wird automatisch geschrieben (bereits gemeldete fremde IPs). Nicht einchecken |
 
 Ort im Projekt: `agents/shelly_syslog/` im Repo IoT-Dashboard (Namensschema wie `omada_syslog`). Für den Agenten gelten die Agenten-Regeln aus der Root-CLAUDE.md (stdout nur JSON über `write_output()`, Log auf stderr, `IOT_DRY_RUN` beachten).
 
@@ -49,15 +49,16 @@ python3 shelly_access_report.py --help
 - **Iterativ arbeiten.** Gezielte Änderungen und Erweiterungen statt kompletter Neuschreibungen.
 - **Bei Rückfragen erst entwickeln und alle Fragen gesammelt am Ende stellen.**
 - Mit dem Nutzer auf Deutsch kommunizieren.
-- Regeln aus der CLAUDE.md im Projekt-Root gelten zusätzlich. Bei Widersprüchen gilt für dieses Modul diese Datei. Insbesondere sind hier auf Wunsch des Nutzers die Ausgabe- und Hilfetexte des Kernmoduls (Bericht-JSON, `pattern`, `reasons`, CLI) englisch, abweichend von der Root-Regel „Ausgaben auf Deutsch“. **Ausnahme:** `message` und `notify` des Agenten sind deutsch wie bei den anderen Agenten; die `reasons` übersetzt `reason_de()` in `shelly_syslog.py` (bei neuen Begründungen im Kernmodul dort ergänzen).
+- Regeln aus der CLAUDE.md im Projekt-Root gelten zusätzlich. Bei Widersprüchen gilt für dieses Modul diese Datei. Insbesondere sind hier auf Wunsch des Nutzers die Ausgabe- und Hilfetexte des Kernmoduls (Bericht-JSON, `pattern`, `reasons`, CLI) englisch, abweichend von der Root-Regel „Ausgaben auf Deutsch“. **Ausnahme:** `message` und `notify` des Agenten sind deutsch wie bei den anderen Agenten.
 - Echte Netzwerkdaten (IPs, MACs) nur in nicht eingecheckten Dateien, im Repo nur `*.skelet` mit Demo-Werten.
 
 ## Agent (`shelly_syslog.py`)
 
-- Einstellungen aus `IOT_AGENT_SETTINGS` (Vorlage `settings.json.skelet`): `log_dir`, `window_minutes` (nur Zugriffe der letzten N Minuten; ältere Dateien werden übersprungen), `namespace`, `sensor_prefix`, `per_target_metrics`, `notify`, `known_devices`, `scoring`, `history`, `state_file`.
-- **Bekannte Geräte:** `iot_device` mit Status `active`, Name = `host_name` (`RestKnownDeviceProvider`), dazu `known_devices` aus den Einstellungen (z. B. MQTT-Client `iobroker`, der nicht in `iot_device` steht). Die IP des Shellys selbst (Ziel) kommt aus `iot_device` (`id` bzw. `host_name` = Hostname im Log).
-- **Sensorwerte** (Ausgabetyp 2), `sensor_id` = `<sensor_prefix>_<kennzahl>`: `max_score`, `suspicious`, `accesses`, `write_accesses`, `sources`, `unknown_sources`, `external_sources`. Mit `per_target_metrics` zusätzlich `<prefix>_<host>_max_score` / `_accesses` je Shelly. Die Sensoren müssen in `iot_sensor` angelegt sein.
-- **Benachrichtigungen:** auffällige Gruppen als `notify`, je Gruppe nur einmal, bis neuere Zugriffe dazukommen (`notify_state.json`), höchstens `max_per_run` pro Lauf.
+- Einstellungen aus `IOT_AGENT_SETTINGS` (Vorlage `settings.json.skelet`): `log_dir`, `window_minutes` (nur Zugriffe der letzten N Minuten; ältere Dateien werden übersprungen), `namespace`, `sensor_prefix`, `allowed_ips`, `notify`, `scoring`, `history`, `state_file`.
+- **Bekannte Geräte:** nur `iot_device` mit Status `active`, Name = `host_name` (`known_devices()`).
+- **Fremde IP:** Quelle vom Typ IP, nicht bekannt und nicht in `allowed_ips` (einzelne IPs oder Netze per `ipaddress`, z. B. für die Shelly Cloud). MQTT und loopback zählen nicht. Die IP des Shellys selbst (Ziel) kommt aus `iot_device` (`id` bzw. `host_name` = Hostname im Log).
+- **Sensorwert** (Ausgabetyp 2): nur `<sensor_prefix>_foreign_ips` = Anzahl verschiedener fremder IPs im Zeitfenster (0 = in Ordnung). Der Sensor muss in `iot_sensor` angelegt sein; mit `max_value` 0 meldet watchdog jeden Wert ab 1.
+- **Benachrichtigungen:** je fremder IP ein `notify` (Ziel-Shellys, Aktionen, Kanal), nur beim ersten Auftreten; erneut erst, wenn die IP `baseline_days` lang nicht zugegriffen hat (`notify_state.json`). Höchstens `max_per_run` pro Lauf.
 - `rate_per_hour` bezieht sich im Agenten auf `window_minutes` (feste Fensterlänge).
 - Bei `IOT_DRY_RUN` werden Historie und Benachrichtigungs-Zustand nicht gespeichert.
 
@@ -71,7 +72,7 @@ Datenfluss: Logdatei → `LogRecord` → `RpcAccess` → `AccessGroup` → Score
 - `PatternDescriber`: erkennt Blöcke (Abstand < 2 s) und regelmäßiges Polling und erzeugt den Text für `pattern`.
 - `ShellyAccessAnalyzer`: gruppiert nach (Quelle, Ziel, Methode ohne Rücksicht auf Groß- und Kleinschreibung, Kanal). Bei mehreren Schreibweisen gewinnt die CamelCase-Form.
 - `ScoringConfig`: `load(path)` für die CLI, `from_dict(settings, base_dir)` für den Agenten. Relative Pfade gelten relativ zur Konfigurationsdatei bzw. `base_dir`.
-- `KnownDeviceProvider` ist die Basisklasse (`load_devices()` liefert `{"address"|"mqtt_client": …, "name": …}`). Unterklassen: `JsonKnownDeviceProvider`, `StaticKnownDeviceProvider`, `CombinedKnownDeviceProvider`; `RestKnownDeviceProvider` steht im Agenten.
+- `KnownDeviceProvider` ist die Basisklasse (`load_devices()` liefert `{"address"|"mqtt_client": …, "name": …}`). Unterklassen: `JsonKnownDeviceProvider`, `StaticKnownDeviceProvider`, `CombinedKnownDeviceProvider`; der Agent übergibt die Geräte aus `iot_device` als `StaticKnownDeviceProvider`.
 - `RpcParser(host_addresses=…)`: optionale Zuordnung Hostname → IP für das Ziel.
 - `ShellyAccessAnalyzer(since=…)`: optionales Zeitfenster.
 - `HistoryStore`: speichert pro Lauf die Raten je Gruppe und die gesehenen Quellen, maximal `baseline_days` Tage.

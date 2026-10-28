@@ -33,11 +33,11 @@ Ein Abzug kann den Score nie unter 0 drücken. Hat ein Zugriff ohnehin 0 Punkte,
 
 Ein Abzug macht einen Zugriff aber nicht automatisch harmlos. Ändert ein Script nachts mit `Sys.SetConfig` die Systemeinstellungen, ergibt das 10 + 25 + 10 − 20 = **25** Punkte. Der Zugriff bleibt im Bericht sichtbar, liegt aber unter dem Schwellwert. Wer solche Zugriffe trotzdem gemeldet haben will, setzt das Gewicht `internal` auf 0.
 
-Eine Gruppe gilt als **auffällig** (`suspicious: true`), wenn ihr Score den Schwellwert erreicht oder überschreitet. Der Standard-Schwellwert ist **50**. Nur auffällige Gruppen werden als Benachrichtigung gemeldet.
+Eine Gruppe gilt als **auffällig** (`suspicious: true`), wenn ihr Score den Schwellwert erreicht oder überschreitet. Der Standard-Schwellwert ist **50**. Der Score steht nur im Bericht im Agenten-Log; Kennzahl und Benachrichtigungen des Agenten hängen nicht davon ab (siehe unten).
 
 ### Wichtige Regeln
 
-- **Bekannte Geräte:** Als bekannt gelten alle Geräte aus `iot_device` mit Status `active`, angezeigt mit ihrem `host_name`. Dazu kommen die Einträge unter `known_devices` in den Einstellungen, z. B. MQTT-Clients wie `iobroker`, die nicht in `iot_device` stehen. Die Shelly Cloud gilt als bekannt, solange `trust_shelly_cloud` an ist.
+- **Bekannte Geräte:** Als bekannt gelten alle Geräte aus `iot_device` mit Status `active`, angezeigt mit ihrem `host_name`. Im Agenten gibt es keine weiteren bekannten Geräte (`known_devices` gilt nur für die eigenständige CLI). Die Shelly Cloud gilt als bekannt, solange `trust_shelly_cloud` an ist.
 - **„Unbekannte Quelle“** zählt nur, wenn überhaupt eine Geräteliste vorhanden ist. Ohne Liste wäre sonst jede Quelle unbekannt.
 - **Historie:** „Neue Quelle“ und „Ratenabweichung“ greifen erst ab dem **zweiten Lauf**, wenn es eine Historie zum Vergleichen gibt.
 - **Nachtzeit:** Sie wird nach der Ortszeit im Log geprüft. Die Sommer- und Winterzeit ist im Zeitstempel enthalten.
@@ -158,14 +158,12 @@ Das ist der schlimmste Fall: Jemand von außen ändert die Netzwerkeinstellungen
 ## Was der Agent mit dem Score macht
 
 - **Bericht im Agenten-Log:** Jede Gruppe erscheint mit `anomaly.score`, `anomaly.suspicious` und `anomaly.reasons`, sortiert nach Score.
-- **Sensorwerte** nach `iot_sensor_data` (Namespace `shelly.syslog`):
-  - `shelly_syslog_max_score`: höchster Score im Zeitfenster
-  - `shelly_syslog_suspicious`: Anzahl auffälliger Gruppen
-  - außerdem `_accesses`, `_write_accesses`, `_sources`, `_unknown_sources` und `_external_sources`
-- **Benachrichtigung** für jede auffällige Gruppe, auf Deutsch und mit den Gründen. Beispiel:
-  > Shelly shellypro2-aabbccddeeff: auffälliger Zugriff von 192.168.0.77 - Shelly.GetStatus 70× über HTTP GET (Score 55: unbekannte Quelle, hohe Rate: 70 Aufrufe/min)
+- Kennzahl und Benachrichtigungen nutzen den Score **nicht**. Sie zählen nur **fremde IPs**: IPs, die nicht mit Status `active` in `iot_device` stehen und nicht unter `allowed_ips` der Einstellungen (einzelne IPs oder Netze, z. B. für die Shelly Cloud). Zugriffe ohne IP (MQTT, loopback) zählen nicht.
+- **Sensorwert** nach `iot_sensor_data` (Namespace `shelly.syslog`): `shelly_syslog_foreign_ips` = Anzahl verschiedener fremder IPs im Zeitfenster, 0 = alles in Ordnung. Mit `max_value` 0 in `iot_sensor` meldet watchdog jeden Wert ab 1.
+- **Benachrichtigung** je fremder IP, auf Deutsch. Beispiel:
+  > Fremde IP 192.168.0.77 greift auf Shellys zu: shellypro2-aabbccddeeff (70×) - Shelly.GetStatus über HTTP GET
 
-  Jede Gruppe wird nur einmal gemeldet. Erst wenn neue Zugriffe dazukommen, gibt es wieder eine Meldung.
+  Jede IP wird nur beim ersten Auftreten gemeldet; erneut erst, wenn sie `baseline_days` lang nicht mehr zugegriffen hat.
 
 ## Einstellen
 

@@ -3,16 +3,13 @@
   "window_minutes": 60,
   "namespace": "shelly.syslog",
   "sensor_prefix": "shelly_syslog",
-  "per_target_metrics": false,
   "notify": {
     "enabled": true,
     "max_per_run": 10
   },
-  "known_devices": [
-    {
-      "mqtt_client": "iobroker",
-      "name": "ioBroker"
-    }
+  "allowed_ips": [
+    "203.0.113.10",
+    "198.51.100.0/24"
   ],
   "scoring": {
     "threshold": 50,

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 shelly_syslog.py - Agent für den Runner (agents/run_agents.py): wertet die
-Syslogs der Shellys aus (wer hat zugegriffen?) und bewertet jede Zugriffsgruppe
-mit einem Auffälligkeits-Score. Die Auswertung selbst steckt in
-shelly_access_report.py (eigenständig nutzbar, nur Standardbibliothek).
+Syslogs der Shellys aus und meldet, ob fremde IP-Adressen auf die Shellys
+zugreifen. Die Auswertung der Logs steckt in shelly_access_report.py
+(eigenständig nutzbar, nur Standardbibliothek).
 
 Aufruf:
     python3 shelly_syslog.py [--config settings.json] [--pretty]
@@ -12,27 +12,32 @@ Die Einstellungen kommen zentral aus iot_agent_config.settings und werden vom
 Runner als IOT_AGENT_SETTINGS mitgegeben (Vorlage: settings.json.skelet);
 --config liest sie stattdessen aus einer Datei.
 
-Ausgabetyp 2 (Add Sensor Value): die Kennzahlen gehen als JSON {"data": [...]}
-auf stdout (sensor_id = <sensor_prefix>_<kennzahl>, Namespace aus den
-Einstellungen); der Runner schreibt sie nach iot_sensor_data. Die Sensoren
-müssen vorher in iot_sensor angelegt sein. Auffällige Zugriffe kommen als
-"notify" mit (je Zugriffsgruppe nur einmal, bis neue Zugriffe dazukommen).
-"message" und "notify" sind deutsch (wie bei den anderen Agenten), der
-Bericht im Log ist englisch (Ausgabeformat des Kernmoduls).
-Der vollständige Bericht (alle Zugriffe mit Score) steht im Log (stderr).
+Fremd ist eine IP, die nicht mit Status 'active' in iot_device steht und auch
+nicht unter "allowed_ips" der Einstellungen (einzelne IPs oder Netze wie
+"35.205.0.0/16", z. B. für die Shelly Cloud). Zugriffe ohne IP (MQTT,
+Skripte auf dem Shelly selbst) zählen nicht.
 
-Bekannte Geräte: alle Geräte aus iot_device mit Status 'active' (Name =
-host_name), dazu "known_devices" aus den Einstellungen (z. B. MQTT-Clients
-wie ioBroker, die nicht in iot_device stehen). Die IP der Shellys selbst
-(Ziel) kommt ebenfalls aus iot_device (id bzw. host_name = Hostname im Log).
+Ausgabetyp 2 (Add Sensor Value): eine Kennzahl als JSON {"data": [...]} auf
+stdout, der Runner schreibt sie nach iot_sensor_data:
+    <sensor_prefix>_foreign_ips   Anzahl verschiedener fremder IPs im Zeitfenster
+                                  (0 = alles in Ordnung)
+Der Sensor muss vorher in iot_sensor angelegt sein; mit max_value 0 meldet
+watchdog jeden Wert ab 1. Zusätzlich kommt je fremder IP eine Benachrichtigung
+als "notify" (nur beim ersten Auftreten; erneut erst, wenn die IP
+baseline_days lang nicht mehr zugegriffen hat). "message" und "notify" sind
+deutsch, der vollständige Bericht (englisch, alle Zugriffe mit Score) steht im
+Log (stderr).
+
+Die IP der Shellys selbst (Ziel) kommt aus iot_device (id bzw. host_name =
+Hostname im Log).
 
 Bei --dry-run des Runners (IOT_DRY_RUN) werden Historie und
 Benachrichtigungs-Zustand nicht gespeichert.
 """
 
 import argparse
+import ipaddress
 import json
-import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -40,21 +45,23 @@ from pathlib import Path
 from dk9mbs_iot.agent import dry_run_from_env, log, rest_from_env, settings_from_env, write_output  # vom Agenten-Runner
 from dk9mbs_iot.query.device import IotDeviceClient
 
-from shelly_access_report import (AccessReport, AnomalyScorer, CombinedKnownDeviceProvider, HistoryStore,
-                                  KnownDeviceProvider, PatternDescriber, RpcParser, ScoringConfig,
-                                  ShellyAccessAnalyzer, StaticKnownDeviceProvider)
+from shelly_access_report import (AccessReport, AnomalyScorer, HistoryStore, PatternDescriber, RpcParser,
+                                  ScoringConfig, ShellyAccessAnalyzer, StaticKnownDeviceProvider)
 
 AGENT_DIR = Path(__file__).resolve().parent
 
 # Nur Geräte mit diesem Status zählen als bekannt (iot_device_status.id)
 KNOWN_DEVICE_STATUS = "active"
 
+# Höchstens so viele Aktionen je fremder IP in der Meldung
+MAX_ACTIONS_IN_TEXT = 3
+
 DEFAULTS = {
     "log_dir": "/var/log/shelly",
     "window_minutes": 60,
     "namespace": "shelly.syslog",
     "sensor_prefix": "shelly_syslog",
-    "per_target_metrics": False,
+    "allowed_ips": [],
     "notify": {"enabled": True, "max_per_run": 10},
     "state_file": "notify_state.json",
 }
@@ -68,30 +75,38 @@ def value(row: dict, field: str):
     return v
 
 
-def sensor_part(text: str) -> str:
-    """Teil einer Sensor-ID: 'shellypro2-aabbccddeeff' -> 'shellypro2_aabbccddeeff'."""
-    return re.sub(r"[^a-z0-9]+", "_", str(text).lower()).strip("_") or "unknown"
+def parse_ip(address):
+    """IP-Objekt oder None (z. B. für leere oder ungültige Adressen)."""
+    try:
+        return ipaddress.ip_address(str(address).strip())
+    except ValueError:
+        return None
+
+
+def allowed_networks(entries: list) -> list:
+    """'allowed_ips' als Netze; einzelne IPs werden zu /32 bzw. /128."""
+    networks = []
+    for entry in entries or []:
+        try:
+            networks.append(ipaddress.ip_network(str(entry).strip(), strict=False))
+        except ValueError as exc:
+            raise RuntimeError(f"invalid entry in allowed_ips: {entry!r}") from exc
+    return networks
 
 
 # --------------------------------------------------------------------------
 # Geräte aus iot_device
 # --------------------------------------------------------------------------
 
-class RestKnownDeviceProvider(KnownDeviceProvider):
+def known_devices(client: IotDeviceClient) -> list:
     """Bekannte Geräte aus iot_device (nur Status 'active'), Name = host_name."""
-
-    def __init__(self, client: IotDeviceClient):
-        super().__init__()
-        self.client = client
-
-    def load_devices(self) -> list:
-        devices = []
-        for row in self.client.fetch_all_devices(status_id=KNOWN_DEVICE_STATUS):
-            address = value(row, "address")
-            if address:
-                name = value(row, "host_name") or value(row, "name") or value(row, "id")
-                devices.append({"address": address, "name": name})
-        return devices
+    devices = []
+    for row in client.fetch_all_devices(status_id=KNOWN_DEVICE_STATUS):
+        address = value(row, "address")
+        if address:
+            name = value(row, "host_name") or value(row, "name") or value(row, "id")
+            devices.append({"address": address, "name": name})
+    return devices
 
 
 def shelly_addresses(client: IotDeviceClient) -> dict:
@@ -108,43 +123,33 @@ def shelly_addresses(client: IotDeviceClient) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Kennzahlen und Benachrichtigungen
+# Fremde IPs, Kennzahl und Benachrichtigungen
 # --------------------------------------------------------------------------
 
-def metric_items(settings: dict, report: dict) -> list:
-    """Kennzahlen als Einträge für den Runner (Ausgabetyp Add Sensor Value)."""
-    prefix = settings["sensor_prefix"]
-    namespace = settings["namespace"]
-    accesses = report["accesses"]
-
-    def sources(predicate) -> int:
-        return len({json.dumps(a["source"], sort_keys=True) for a in accesses if predicate(a)})
-
-    metrics = {
-        "max_score": report["summary"]["max_score"],
-        "suspicious": report["summary"]["suspicious_entries"],
-        "accesses": report["summary"]["total_accesses"],
-        "write_accesses": report["summary"]["write_accesses"],
-        "sources": sources(lambda a: True),
-        "unknown_sources": sources(lambda a: "unknown source" in a["anomaly"]["reasons"]),
-        "external_sources": sources(lambda a: "external (public) address" in a["anomaly"]["reasons"]),
-    }
-    items = [{"id": f"{prefix}_{name}", "value": v, "namespace": namespace} for name, v in metrics.items()]
-
-    if settings.get("per_target_metrics"):
-        per_target = {}
-        for a in accesses:
-            t = per_target.setdefault(a["target"]["host"], {"max_score": 0, "accesses": 0})
-            t["max_score"] = max(t["max_score"], a["anomaly"]["score"])
-            t["accesses"] += a["count"]
-        for host, values in sorted(per_target.items()):
-            for name, v in values.items():
-                items.append({"id": f"{prefix}_{sensor_part(host)}_{name}", "value": v, "namespace": namespace})
-    return items
+def foreign_ips(access_rows: list, known: set, allowed: list) -> dict:
+    """
+    Zugriffe fremder IPs, je IP zusammengefasst:
+    {ip: {"targets": {host: anzahl}, "actions": {methode: anzahl}, "channels": set, "last": iso}}
+    """
+    result = {}
+    for a in access_rows:
+        source = a["source"]
+        if source.get("type") != "IP":
+            continue
+        ip = parse_ip(source.get("address"))
+        if ip is None or ip in known or any(ip in net for net in allowed):
+            continue
+        entry = result.setdefault(str(ip), {"targets": {}, "actions": {}, "channels": set(), "last": ""})
+        host = a["target"]["host"]
+        entry["targets"][host] = entry["targets"].get(host, 0) + a["count"]
+        entry["actions"][a["action"]] = entry["actions"].get(a["action"], 0) + a["count"]
+        entry["channels"].add(a["channel"])
+        entry["last"] = max(entry["last"], a["period"]["to"] or "")
+    return result
 
 
 class NotificationState:
-    """Merkt sich je Zugriffsgruppe den Zeitpunkt des zuletzt gemeldeten Zugriffs."""
+    """Merkt sich je gemeldeter fremder IP den Zeitpunkt des letzten Zugriffs."""
 
     def __init__(self, path: Path, keep_days: int = 7):
         self.path = path
@@ -156,68 +161,42 @@ class NotificationState:
             except (ValueError, OSError):
                 self.notified = {}
 
-    def is_new(self, key: str, last_access: str) -> bool:
-        previous = self.notified.get(key)
-        return previous is None or (last_access and last_access > previous)
+    def is_new(self, key: str) -> bool:
+        return key not in self.notified
 
     def mark(self, key: str, last_access: str) -> None:
-        self.notified[key] = last_access
+        self.notified[key] = max(self.notified.get(key) or "", last_access or "")
 
     def save(self) -> None:
+        # IPs, die keep_days lang nicht mehr zugegriffen haben, werden wieder gemeldet
         limit = (datetime.now().astimezone() - timedelta(days=self.keep_days)).isoformat()
         self.notified = {k: v for k, v in self.notified.items() if v and v >= limit}
         self.path.write_text(json.dumps({"notified": self.notified}, indent=1), encoding="utf-8")
 
 
-# Begründungen des Kernmoduls (englisch) für Meldungen auf Deutsch
-REASON_TRANSLATIONS = [
-    (re.compile(r"^unknown source$"), "unbekannte Quelle"),
-    (re.compile(r"^external \(public\) address$"), "öffentliche Adresse"),
-    (re.compile(r"^write access$"), "schreibender Zugriff"),
-    (re.compile(r"^sensitive action: (.+)$"), r"sensible Aktion \1"),
-    (re.compile(r"^(\d+)× at night \((.+)\)$"), r"\1× nachts (\2)"),
-    (re.compile(r"^irregular timing$"), "unregelmäßig"),
-    (re.compile(r"^high rate: (\d+) calls/min$"), r"hohe Rate: \1 Aufrufe/min"),
-    (re.compile(r"^internal call \(loopback\)$"), "interner Aufruf"),
-    (re.compile(r"^read access by Shelly Cloud$"), "Lesezugriff der Shelly Cloud"),
-    (re.compile(r"^new source \(not seen before\)$"), "neue Quelle"),
-    (re.compile(r"^rate ([\d.]+)× higher than usual$"), r"Rate \1× höher als üblich"),
-]
+def foreign_ip_text(ip: str, entry: dict) -> str:
+    targets = ", ".join(f"{host} ({count}×)" for host, count in
+                        sorted(entry["targets"].items(), key=lambda t: -t[1]))
+    actions = sorted(entry["actions"], key=lambda m: -entry["actions"][m])
+    action_text = ", ".join(actions[:MAX_ACTIONS_IN_TEXT]) + (", …" if len(actions) > MAX_ACTIONS_IN_TEXT else "")
+    return (f"Fremde IP {ip} greift auf Shellys zu: {targets} - {action_text} "
+            f"über {', '.join(sorted(entry['channels']))}")
 
 
-def reason_de(reason: str) -> str:
-    for pattern, replacement in REASON_TRANSLATIONS:
-        if pattern.match(reason):
-            return pattern.sub(replacement, reason)
-    return reason  # unbekannte Begründung unverändert lassen
-
-
-def source_text(source: dict) -> str:
-    label = source.get("address") or source.get("client_id") or source.get("transport") or source["type"]
-    if source.get("type") == "MQTT":
-        label = f"MQTT-Client {label}"
-    return f"{label} ({source['name']})" if source.get("name") else label
-
-
-def notification_texts(access_rows: list, state: NotificationState, max_per_run: int) -> list:
-    """Texte (deutsch) für neue auffällige Zugriffe; markiert sie im Zustand."""
+def notification_texts(foreign: dict, state: NotificationState, max_per_run: int) -> list:
+    """Texte (deutsch) für erstmals gesehene fremde IPs; aktualisiert den Zustand."""
     texts, skipped = [], 0
-    for a in access_rows:
-        if not a["anomaly"]["suspicious"]:
+    for ip, entry in sorted(foreign.items()):
+        new = state.is_new(ip)
+        state.mark(ip, entry["last"])
+        if not new:
             continue
-        last = a["period"]["to"]
-        if not state.is_new(a["_key"], last):
-            continue
-        state.mark(a["_key"], last)
         if len(texts) >= max_per_run:
             skipped += 1
             continue
-        texts.append(
-            f"Shelly {a['target']['host']}: auffälliger Zugriff von {source_text(a['source'])} - "
-            f"{a['action']} {a['count']}× über {a['channel']} "
-            f"(Score {a['anomaly']['score']}: {', '.join(reason_de(r) for r in a['anomaly']['reasons'])})")
+        texts.append(foreign_ip_text(ip, entry))
     if skipped:
-        texts.append(f"Shelly-Syslog: {skipped} weitere auffällige Zugriffsgruppe(n), siehe Agenten-Log")
+        texts.append(f"Shelly-Syslog: {skipped} weitere fremde IP(s), siehe Agenten-Log")
     return texts
 
 
@@ -244,16 +223,15 @@ def run(settings: dict, base_dir: Path, rest: dict, dry_run: bool) -> tuple:
         log_dir = base_dir / log_dir
     if not log_dir.is_dir():
         raise RuntimeError(f"log directory {log_dir} not found")
+    allowed = allowed_networks(settings["allowed_ips"])
 
     config = ScoringConfig.from_dict(settings, base_dir)
     window = timedelta(minutes=int(settings["window_minutes"]))
     since = datetime.now().astimezone() - window
 
     client = IotDeviceClient(apikey=rest["apikey"], base_url=rest["base_url"])
-    providers = [RestKnownDeviceProvider(client)]
-    if settings.get("known_devices"):
-        providers.append(StaticKnownDeviceProvider(settings["known_devices"]))
-    devices = CombinedKnownDeviceProvider(providers)
+    devices = known_devices(client)
+    known = {ip for ip in (parse_ip(d["address"]) for d in devices) if ip is not None}
 
     history = None
     if config.history_enabled:
@@ -261,13 +239,16 @@ def run(settings: dict, base_dir: Path, rest: dict, dry_run: bool) -> tuple:
                                config.baseline_days)
 
     describer = PatternDescriber()
-    scorer = AnomalyScorer(config, devices, history, describer)
+    scorer = AnomalyScorer(config, StaticKnownDeviceProvider(devices), history, describer)
     parser = RpcParser(host_addresses=shelly_addresses(client))
     analyzer = ShellyAccessAnalyzer(parser=parser, since=since).add_directory(log_dir)
-    groups = analyzer.groups()
-    report = AccessReport(groups, analyzer.files, log_dir, describer, scorer,
+    report = AccessReport(analyzer.groups(), analyzer.files, log_dir, describer, scorer,
                           sort_by_score=True, window_hours=window.total_seconds() / 3600)
     data = report.to_dict()
+
+    foreign = foreign_ips(report.accesses(), known, allowed)
+    for ip, entry in sorted(foreign.items()):
+        log(foreign_ip_text(ip, entry))
 
     notify = []
     state = None
@@ -275,19 +256,20 @@ def run(settings: dict, base_dir: Path, rest: dict, dry_run: bool) -> tuple:
         state_file = Path(settings["state_file"])
         state = NotificationState(state_file if state_file.is_absolute() else base_dir / state_file,
                                   config.baseline_days)
-        notify = notification_texts(report.accesses(), state, int(settings["notify"]["max_per_run"]))
+        notify = notification_texts(foreign, state, int(settings["notify"]["max_per_run"]))
 
     if not dry_run:
         report.update_history()
         if state:
             state.save()
 
+    items = [{"id": f"{settings['sensor_prefix']}_foreign_ips", "value": len(foreign),
+              "namespace": settings["namespace"]}]
     s = data["summary"]
     # Kurzmeldung für iot_agent_status (deutsch wie bei den anderen Agenten)
-    message = (f"max. Score {s['max_score']}, {s['suspicious_entries']} auffällig, "
-               f"{s['total_accesses']} Zugriffe auf {len(s['targets'])} Shelly(s) "
-               f"in {settings['window_minutes']} min")
-    return data, metric_items(settings, data), message, notify
+    message = (f"{len(foreign)} fremde IP(s), {s['total_accesses']} Zugriffe auf "
+               f"{len(s['targets'])} Shelly(s) in {settings['window_minutes']} min")
+    return data, items, message, notify
 
 
 def main() -> int:
