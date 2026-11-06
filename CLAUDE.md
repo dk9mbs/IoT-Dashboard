@@ -76,6 +76,10 @@ API-Keys und MAC-Adressen prüfen.
   `message` (bzw. bei Fehlern die des Runners) landet mit Start, Exitcode und
   Dauer in `iot_agent_status` (`config_id` → `iot_agent_config`), nur bei
   zentraler Konfiguration.
+- Neue Sensoren eines Agenten brauchen neben `iot_sensor` auch eine Zeile in
+  `iot_sensor_routing` (`external_sensor_id` → `internal_sensor_id`, `status_id` 10).
+  Ohne sie legt der Server eine „auto generated“-Zeile mit Status 0 an und der
+  Wert landet bei keinem Sensor.
 - Benachrichtigungen: jeder Agent kann `"notify": ["Text", …]` mit ausgeben
   (`write_output(items, message, notify)`, auch bei Ausgabetyp 1); der Runner
   legt sie in `iot_notification` (status `new`) an. Erkennen gehört nicht in

@@ -29,7 +29,7 @@ python3 www_access.py --config settings.json --pretty     # lokal mit eigener Ei
   - `rate`: Spitze ≥ `max_per_minute` Anfragen pro Minute.
   - `probe`: ≥ `probe_min` Treffer auf `probe_paths` (Teiltext, ohne Rücksicht auf Groß-/Kleinschreibung).
   - `errors`: ≥ `min_requests` Anfragen und Anteil 4xx ≥ `error_ratio`.
-- **Sensorwerte** (bewusst nur zwei, in `iot_sensor` anlegen):
+- **Sensorwerte** (bewusst nur zwei, in `iot_sensor` und `iot_sensor_routing` anlegen):
   - `<sensor_prefix>_suspicious_ips`: Anzahl auffälliger IPs (mit `max_value` 0 meldet watchdog jeden Wert ab 1)
   - `<sensor_prefix>_max_rate`: höchste Anfragen/min einer einzelnen externen IP
 - **Benachrichtigungen:** je auffälliger IP ein deutscher Text, nur beim ersten Auftreten; erneut, wenn die IP `renotify_days` lang nicht auffällig war. Höchstens `notify.max_per_run` pro Lauf.
