@@ -1,0 +1,26 @@
+{
+  "log_files": ["/var/log/apache2/access.log"],
+  "window_minutes": 60,
+  "namespace": "www.access",
+  "sensor_prefix": "www_access",
+  "allowed_ips": [
+    "203.0.113.10",
+    "198.51.100.0/24"
+  ],
+  "known_agents": ["Nextcloud", "mirall"],
+  "rules": {
+    "enum_min_values": 20,
+    "max_per_minute": 120,
+    "probe_min": 3,
+    "probe_paths": ["/.env", "/.git/", "wp-login.php", "xmlrpc.php", "phpmyadmin",
+                    "/cgi-bin/", "/vendor/phpunit", "/.aws/", "/actuator", "/boaform"],
+    "min_requests": 20,
+    "error_ratio": 0.5
+  },
+  "notify": {
+    "enabled": true,
+    "max_per_run": 10
+  },
+  "renotify_days": 7,
+  "state_file": "notify_state.json"
+}

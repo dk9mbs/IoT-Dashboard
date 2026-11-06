@@ -52,3 +52,6 @@ agents/shelly_syslog/known_devices.json
 agents/shelly_syslog/shelly_access_history.json
 agents/shelly_syslog/notify_state.json
 agents/shelly_syslog/report*.json
+
+# Webserver-Access-Agent: Benachrichtigungs-Zustand (wird automatisch angelegt)
+agents/www_access/notify_state.json

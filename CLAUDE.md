@@ -37,6 +37,7 @@ API-Keys und MAC-Adressen prüfen.
 - `nextcloud` – Server, `/usr/local/IoT-Dashboard`, venv `/var/local/iotdash`,
   läuft als root; systemd-Dienste `iot-dashboard` und `iot-agents`.
 - `omada_syslog` gehört auf den Host, der die Omada-Syslogs empfängt.
+- `www_access` gehört auf den Host mit dem Webserver-Log (`/var/log/apache2/access.log`).
 
 ## Fachliche Regeln
 
@@ -49,7 +50,7 @@ API-Keys und MAC-Adressen prüfen.
 - Shellys fragt der Agent `shelly` per HTTP ab (setzt ebenfalls
   `last_scan_on`, dazu WLAN, Firmware, Update); nmap legt sie nur an.
 - Ausgabetypen: nmap 3 (Add/Update Device), shelly 4 (Update Device),
-  omada_syslog, shelly_syslog und disk_usage 2 (Add Sensor Value), watchdog 1 (No Action),
+  omada_syslog, shelly_syslog, www_access und disk_usage 2 (Add Sensor Value), watchdog 1 (No Action),
   notify 5 (Update Notification – setzt nur Meldungen auf `sent`/`failed`).
   Geschrieben wird nur noch über den Runner; gelesen wird weiterhin im Agenten.
 - `mac` nur senden, wenn bekannt – **immer ohne Fallback**.
