@@ -30,8 +30,9 @@ python3 www_access.py --config settings.json --pretty     # lokal mit eigener Ei
   - `probe`: ≥ `probe_min` Treffer auf `probe_paths` (Teiltext, ohne Rücksicht auf Groß-/Kleinschreibung).
   - `errors`: ≥ `min_requests` Anfragen und Anteil 4xx ≥ `error_ratio`.
 - **Sensorwerte** (bewusst nur zwei, in `iot_sensor` und `iot_sensor_routing` anlegen):
-  - `<sensor_prefix>_suspicious_ips`: Anzahl auffälliger IPs (mit `max_value` 0 meldet watchdog jeden Wert ab 1)
-  - `<sensor_prefix>_max_rate`: höchste Anfragen/min einer einzelnen externen IP
+  - `<sensor_prefix>_<host>_suspicious_ips`: Anzahl auffälliger IPs (mit `max_value` 0 meldet watchdog jeden Wert ab 1)
+  - `<sensor_prefix>_<host>_max_rate`: höchste Anfragen/min einer einzelnen externen IP
+  - `<host>` = Einstellung `host`, sonst Hostname ohne Domain (wie bei `disk_usage`), z. B. `www_access_mail_max_rate`
 - **Benachrichtigungen:** je auffälliger IP ein deutscher Text, nur beim ersten Auftreten; erneut, wenn die IP `renotify_days` lang nicht auffällig war. Höchstens `notify.max_per_run` pro Lauf.
 - Der Bericht (JSON mit Details je auffälliger IP) geht nach stderr. Bei `IOT_DRY_RUN` wird `notify_state.json` nicht gespeichert.
 - Der Agent erkennt und meldet nur; Sperren (z. B. fail2ban) gehört nicht hierher.

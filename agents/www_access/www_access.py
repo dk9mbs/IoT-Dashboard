@@ -25,11 +25,13 @@ Regel greift:
 Der User-Agent wird nur in der Meldung genannt, er ist keine eigene Regel.
 
 Ausgabetyp 2 (Add Sensor Value): zwei Kennzahlen als JSON {"data": [...]}:
-    <sensor_prefix>_suspicious_ips   Anzahl auffälliger IPs im Zeitfenster
-                                     (0 = alles in Ordnung)
-    <sensor_prefix>_max_rate         höchste Anfragen pro Minute einer
-                                     einzelnen externen IP
-Die Sensoren müssen vorher in iot_sensor angelegt sein. Je auffälliger IP
+    <sensor_prefix>_<host>_suspicious_ips   Anzahl auffälliger IPs im Zeitfenster
+                                            (0 = alles in Ordnung)
+    <sensor_prefix>_<host>_max_rate         höchste Anfragen pro Minute einer
+                                            einzelnen externen IP
+<host> ist die Einstellung "host", sonst der Hostname ohne Domain (wie bei
+disk_usage), z. B. www_access_mail_max_rate. Die Sensoren müssen vorher in
+iot_sensor und iot_sensor_routing angelegt sein. Je auffälliger IP
 kommt eine Benachrichtigung als "notify" (nur beim ersten Auftreten; erneut
 erst, wenn die IP renotify_days lang nicht mehr auffällig war). Der Bericht
 (alle auffälligen IPs mit Details) steht im Log (stderr).
@@ -43,6 +45,7 @@ import gzip
 import ipaddress
 import json
 import re
+import socket
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -58,6 +61,7 @@ DEFAULTS = {
     "window_minutes": 60,
     "namespace": "www.access",
     "sensor_prefix": "www_access",
+    "host": None,          # Teil der Sensor-ID; leer = Hostname ohne Domain
     "allowed_ips": [],
     # User-Agents eigener Clients (Teiltext): zählen nicht für die Regel enumeration
     "known_agents": ["Nextcloud", "mirall"],
@@ -357,6 +361,12 @@ def notification_texts(suspicious: list, state: NotificationState, max_per_run: 
 # Ablauf
 # --------------------------------------------------------------------------
 
+def sensor_host(host) -> str:
+    """Host für die Sensor-ID: 'mail.dk9mbs.de' -> 'mail', nur a-z, 0-9 und _."""
+    name = (host or socket.gethostname()).split(".")[0].lower()
+    return re.sub(r"[^a-z0-9]+", "_", name).strip("_") or "host"
+
+
 def load_settings(config_file):
     """Einstellungen + Basisordner für relative Pfade."""
     if config_file:
@@ -399,7 +409,8 @@ def run(settings: dict, base_dir: Path, dry_run: bool, now: datetime = None) -> 
     if state and not dry_run:
         state.save()
 
-    prefix, namespace = settings["sensor_prefix"], settings["namespace"]
+    prefix = f"{settings['sensor_prefix']}_{sensor_host(settings.get('host'))}"
+    namespace = settings["namespace"]
     items = [
         {"id": f"{prefix}_suspicious_ips", "value": len(suspicious), "namespace": namespace},
         {"id": f"{prefix}_max_rate", "value": max_rate, "namespace": namespace},
